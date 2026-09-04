@@ -18,8 +18,11 @@ FORECAST_URL.search = new URLSearchParams({
   // fetched hourly and shifted the same way. wind_speed_10m and
   // wind_direction_10m are instant, fetched at native 15-min resolution
   // via minutely_15 instead, no shift needed.
-  hourly: "temperature_2m,weathercode,wind_gusts_10m",
-  minutely_15: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m",
+  hourly: "wind_gusts_10m",
+  // weathercode confirmed genuinely 15-min resolution (derived per-timestep
+  // from cloud_cover etc., not hourly-native) -- fetched here instead of
+  // hourly so condition icons stop repeating a stale value 4x per hour.
+  minutely_15: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,weathercode",
 });
 
 let latestData = null; // most recent fetch, read by the ask handler when building model context
@@ -83,18 +86,6 @@ function conditionLabel(code) {
   if (DRIZZLE_CODES.has(code)) return "drizzle";
   if (RAIN_CODES.has(code)) return "rain";
   return code === 0 ? "clear" : "cloudy";
-}
-
-// weathercode is an instant reading at its own timestamp (confirmed against
-// the docs -- unlike precipitation_probability, it needs no hour shift), so
-// this is a plain "most recent known reading" lookup, not interpolation.
-function weathercodeAt(hourlyTime, hourlyCodes, time) {
-  let code = hourlyCodes[0];
-  for (let i = 0; i < hourlyTime.length; i++) {
-    if (new Date(hourlyTime[i]) <= time) code = hourlyCodes[i];
-    else break;
-  }
-  return code;
 }
 
 function formatHour(isoTime) {
@@ -204,6 +195,7 @@ function renderTodayChart(data) {
     mm: mmAt(idx),
     windSpeed: data.minutely_15.wind_speed_10m[idx],
     windDir: data.minutely_15.wind_direction_10m[idx],
+    code: data.minutely_15.weathercode[idx],
   }));
 
   const linePath = points.map((p) => `${p.x.toFixed(1)},${p.yTemp.toFixed(1)}`).join(" ");
@@ -229,12 +221,10 @@ function renderTodayChart(data) {
   const barWidth = Math.max((quarterMs / spanMs) * plotWidth * 0.82, 3);
   const bars = points
     .map((p) => {
-      const t = new Date(p.time);
-      const code = weathercodeAt(data.hourly.time, data.hourly.weathercode, t);
-      const family = precipFamily(code);
+      const family = precipFamily(p.code);
       const barHeight = Math.min(p.mm / HEIGHT_MAX_MM, 1) * plotHeight;
       const y = plotTop + plotHeight - barHeight;
-      return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" class="precip-bar precip-${family}"><title>${formatHour(p.time)} — ${p.mm.toFixed(1)}mm, ${describeCode(code)[0].toLowerCase()}</title></rect>`;
+      return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" class="precip-bar precip-${family}"><title>${formatHour(p.time)} — ${p.mm.toFixed(1)}mm, ${describeCode(p.code)[0].toLowerCase()}</title></rect>`;
     })
     .join("");
 
@@ -246,13 +236,12 @@ function renderTodayChart(data) {
 
   // Top strip, stacked: condition icons above, wind arrow+speed below --
   // both fixed-position (not line-following) so they stack predictably
-  // rather than the wind row having to chase a moving icon row. Condition
-  // icons repeat up to 4x within an hour (weathercode is hourly); wind is
-  // genuine 15-min data throughout, no repetition.
+  // rather than the wind row having to chase a moving icon row. weathercode
+  // is genuine 15-min data (confirmed derived per-timestep from cloud_cover
+  // etc., not hourly-native), same grid as everything else -- no repetition.
   const conditionIcons = points
     .map((p) => {
-      const code = weathercodeAt(data.hourly.time, data.hourly.weathercode, new Date(p.time));
-      const icon = describeCode(code)[1];
+      const icon = describeCode(p.code)[1];
       return `<text x="${p.x.toFixed(1)}" y="14" class="chart-icon-label" text-anchor="middle">${icon}</text>`;
     })
     .join("");
@@ -313,10 +302,10 @@ function renderTodayChart(data) {
     </svg>
   `;
 
-  attachChartHover(wrap, points, data.hourly.time, data.hourly.weathercode);
+  attachChartHover(wrap, points);
 }
 
-function attachChartHover(wrap, points, hourlyTime, hourlyCodes) {
+function attachChartHover(wrap, points) {
   const svg = wrap.querySelector(".chart-svg");
   const guide = svg.querySelector(".hover-guide");
   const hoverDot = svg.querySelector(".hover-dot");
@@ -341,9 +330,7 @@ function attachChartHover(wrap, points, hourlyTime, hourlyCodes) {
     const scale = CHART.width / rect.width;
     const svgX = (evt.clientX - rect.left) * scale;
     const p = nearestPoint(svgX);
-    const t = new Date(p.time);
-    const code = weathercodeAt(hourlyTime, hourlyCodes, t);
-    const [desc, icon] = describeCode(code);
+    const [desc, icon] = describeCode(p.code);
 
     guide.setAttribute("x1", p.x);
     guide.setAttribute("x2", p.x);
@@ -437,8 +424,15 @@ function buildWeatherContext(data) {
     .join(",");
 
   const precipIdxs = remainingTodayIndices(data.hourly.time, now);
+  // weathercode moved to minutely_15 (see fetch config) -- kept at hourly
+  // cadence here to match the on-the-hour marks the rest of this series
+  // set uses, not to blow up the prompt to 15-min granularity for every
+  // field.
   const conditionSeries = precipIdxs
-    .map((i) => `${formatHour(data.hourly.time[i])}=${conditionLabel(data.hourly.weathercode[i])}`)
+    .map((i) => {
+      const mIdx = data.minutely_15.time.indexOf(data.hourly.time[i]);
+      return `${formatHour(data.hourly.time[i])}=${conditionLabel(data.minutely_15.weathercode[mIdx])}`;
+    })
     .join(",");
 
   // wind_gusts_10m is a preceding-hour max, same convention precipitation_
