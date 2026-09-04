@@ -135,16 +135,17 @@ function renderTodayChart(data) {
   // than a separate band -- bar height is probability against the full
   // plot height (100% reaches the top), low-opacity so the line stays
   // readable through it. One bar per 15-min slot (matching the temp
-  // line's grid), each holding its containing hour's probability -- still
-  // not pretending to precision the data doesn't have.
+  // line's grid), height linearly interpolated between the two bracketing
+  // hourly readings so it ramps smoothly rather than stepping at each
+  // hour boundary -- exact at the hour marks, blended in between.
   const quarterMs = 15 * 60 * 1000;
   const barWidth = Math.max((quarterMs / spanMs) * plotWidth * 0.82, 3);
   const bars = points
     .map((p) => {
-      const prob = hourlyValueAt(data.hourly.time, data.hourly.precipitation_probability, new Date(p.time));
+      const prob = interpolateHourly(data.hourly.time, data.hourly.precipitation_probability, new Date(p.time));
       const barHeight = (prob / 100) * plotHeight;
       const y = plotHeight - barHeight;
-      return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" class="precip-bar"><title>${formatHour(p.time)} — ${prob}% rain chance</title></rect>`;
+      return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" class="precip-bar"><title>${formatHour(p.time)} — ${Math.round(prob)}% rain chance (smoothed)</title></rect>`;
     })
     .join("");
 
@@ -178,28 +179,31 @@ function renderTodayChart(data) {
     </svg>
   `;
 
-  attachChartHover(wrap, points, precipPoints);
+  attachChartHover(wrap, points, data.hourly.time, data.hourly.precipitation_probability);
 }
 
-function hourlyValueAt(hourlyTime, hourlyValues, time) {
-  let val = hourlyValues[0];
-  for (let i = 0; i < hourlyTime.length; i++) {
-    if (new Date(hourlyTime[i]) <= time) val = hourlyValues[i];
-    else break;
+// Hourly readings are point samples, not step functions -- linearly
+// interpolating between the two bracketing hours gives a continuous
+// value with no fabricated precision beyond "assume uniform change
+// between two known readings," the same treatment already implicit in
+// drawing straight line segments between the temperature points.
+function interpolateHourly(hourlyTime, hourlyValues, time) {
+  const t = time.getTime();
+  const first = new Date(hourlyTime[0]).getTime();
+  if (t <= first) return hourlyValues[0];
+
+  for (let i = 0; i < hourlyTime.length - 1; i++) {
+    const t0 = new Date(hourlyTime[i]).getTime();
+    const t1 = new Date(hourlyTime[i + 1]).getTime();
+    if (t >= t0 && t <= t1) {
+      const frac = (t - t0) / (t1 - t0);
+      return hourlyValues[i] + frac * (hourlyValues[i + 1] - hourlyValues[i]);
+    }
   }
-  return val;
+  return hourlyValues[hourlyValues.length - 1];
 }
 
-function precipForTime(precipPoints, time) {
-  let match = precipPoints[0];
-  for (const p of precipPoints) {
-    if (new Date(p.time) <= time) match = p;
-    else break;
-  }
-  return match;
-}
-
-function attachChartHover(wrap, points, precipPoints) {
+function attachChartHover(wrap, points, hourlyTime, hourlyPrecip) {
   const svg = wrap.querySelector(".chart-svg");
   const guide = svg.querySelector(".hover-guide");
   const hoverDot = svg.querySelector(".hover-dot");
@@ -224,7 +228,7 @@ function attachChartHover(wrap, points, precipPoints) {
     const scale = CHART.width / rect.width;
     const svgX = (evt.clientX - rect.left) * scale;
     const p = nearestPoint(svgX);
-    const precip = precipForTime(precipPoints, new Date(p.time));
+    const precip = Math.round(interpolateHourly(hourlyTime, hourlyPrecip, new Date(p.time)));
 
     guide.setAttribute("x1", p.x);
     guide.setAttribute("x2", p.x);
@@ -234,7 +238,7 @@ function attachChartHover(wrap, points, precipPoints) {
     hoverDot.setAttribute("cy", p.yTemp);
     hoverDot.classList.add("visible");
 
-    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong> at ${formatHour(p.time)}<br>${precip.precip}% rain chance (${formatHour(precip.time)} hour)`;
+    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong> at ${formatHour(p.time)}<br>${precip}% rain chance (smoothed)`;
     tooltip.classList.add("visible");
 
     const screenX = rect.left + p.x / scale;
@@ -289,7 +293,7 @@ async function loadForecast() {
   }
 }
 
-const WEATHER_SYSTEM_PROMPT = `Weather assistant for Edinburgh. Use only the data below, don't invent numbers. Temperature is per 15 minutes; rain probability is per hour and applies to that whole hour (no rain amount/severity data yet, no wind, no other days — say so if asked). Keep answers to 1-2 sentences.`;
+const WEATHER_SYSTEM_PROMPT = `Weather assistant for Edinburgh. Use only the data below, don't invent numbers. Temperature is a reading every 15 minutes; rain probability is one reading per hour (no rain amount/severity data yet, no wind, no other days — say so if asked). Keep answers to 1-2 sentences.`;
 
 function withTimeout(promise, ms) {
   return Promise.race([
