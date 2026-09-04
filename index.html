@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>weather-interrogator</title>
-<link rel="stylesheet" href="css/style.css?v=3">
+<link rel="stylesheet" href="css/style.css?v=4">
 </head>
 <body>
 
@@ -24,19 +24,15 @@
 
   <section class="panel llm-stub">
     <h2>Ask <span id="model-status-pill" class="stub-badge">checking&hellip;</span></h2>
-    <p class="stub-note">Runs on-device via Chrome's built-in Gemini Nano &mdash; nothing you type here is sent to a server. Requires desktop Chrome with the Prompt API available.</p>
-
-    <fieldset class="granularity-picker">
-      <legend>Data fed to the model</legend>
-      <label><input type="radio" name="granularity" value="hourly" checked> Hourly</label>
-      <label><input type="radio" name="granularity" value="minutely_15"> 15-minutely</label>
-    </fieldset>
+    <p class="stub-note">Preloaded with Edinburgh's 15-minute temperature forecast for the rest of today. Runs on-device via Chrome's built-in Gemini Nano &mdash; nothing you type here is sent to a server. The session stays open, so follow-up questions keep context. Requires desktop Chrome with the Prompt API available.</p>
 
     <form id="ask-form" class="ask-form">
       <input id="ask-input" type="text" placeholder="e.g. Is it worth a BBQ this weekend?" autocomplete="off">
       <button id="ask-submit" type="submit" disabled>Ask</button>
     </form>
-    <div id="ask-response" class="ask-response" hidden></div>
+    <div id="ask-log" class="ask-log">
+      <p class="log-entry log-status">No questions asked yet.</p>
+    </div>
   </section>
 
   <details class="panel raw-details">
@@ -49,6 +45,6 @@
   <p>Data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>. No API key, no tracking. On-device model, no server.</p>
 </footer>
 
-<script src="js/app.js?v=3"></script>
+<script src="js/app.js?v=4"></script>
 </body>
 </html>

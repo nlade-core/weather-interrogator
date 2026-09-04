@@ -116,7 +116,7 @@ main {
 }
 
 .stub-badge.available { background: #1e3a2a; color: #6fd68f; }
-.stub-badge.downloadable { background: #3a331e; color: #e0b45c; }
+.stub-badge.downloadable, .stub-badge.preparing { background: #3a331e; color: #e0b45c; }
 .stub-badge.unavailable, .stub-badge.missing { background: #3a1e1e; color: #ff8080; }
 
 .stub-note {
@@ -125,31 +125,46 @@ main {
   margin-bottom: 0.75rem;
 }
 
-.granularity-picker {
-  border: 1px solid var(--border);
+.ask-log {
+  margin-top: 0.75rem;
+  max-height: 40vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.log-entry {
+  padding: 0.6rem 0.75rem;
   border-radius: 6px;
-  padding: 0.5rem 0.75rem;
-  margin-bottom: 0.75rem;
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
+  font-size: 0.9rem;
+  line-height: 1.4;
 }
 
-.granularity-picker legend {
-  padding: 0 0.4rem;
+.log-entry.log-status {
   color: var(--muted);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 0.8rem;
+  font-style: italic;
+  padding: 0.2rem 0.1rem;
 }
 
-.granularity-picker label {
-  font-size: 0.85rem;
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  cursor: pointer;
+.log-entry.log-question {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.log-entry.log-answer {
+  background: var(--bg);
+  border: 1px dashed var(--accent);
+  color: var(--text);
+}
+
+.log-entry.log-error {
+  background: #2a1414;
+  border: 1px solid #5c2626;
+  color: #ff8080;
 }
 
 .ask-form {
@@ -184,16 +199,6 @@ main {
   background: var(--border);
   color: var(--muted);
   cursor: not-allowed;
-}
-
-.ask-response {
-  margin-top: 0.75rem;
-  padding: 0.75rem;
-  background: var(--bg);
-  border: 1px dashed var(--border);
-  border-radius: 6px;
-  color: var(--muted);
-  font-size: 0.9rem;
 }
 
 .raw-details summary {

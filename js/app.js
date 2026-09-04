@@ -171,13 +171,15 @@ async function loadForecast() {
     renderTodayChart(data);
 
     statusEl.textContent = `Updated ${new Date().toLocaleTimeString("en-GB")} — Edinburgh (${data.latitude.toFixed(2)}, ${data.longitude.toFixed(2)})`;
+    return data;
   } catch (err) {
     statusEl.textContent = `Failed to load forecast: ${err.message}`;
     statusEl.classList.add("error");
+    throw err;
   }
 }
 
-const WEATHER_SYSTEM_PROMPT = `You are a concise weather assistant for Edinburgh, Scotland. Answer using only the forecast data provided in the prompt — don't invent numbers that aren't there. Be direct and practical, aimed at someone deciding whether to do something outdoors. A couple of sentences is enough.`;
+const WEATHER_SYSTEM_PROMPT = `Weather assistant for Edinburgh. Use only the temperature data below, don't invent numbers. If asked about something it doesn't cover (rain, wind, other days), say so. Keep answers to 1-2 sentences.`;
 
 function withTimeout(promise, ms) {
   return Promise.race([
@@ -186,36 +188,45 @@ function withTimeout(promise, ms) {
   ]);
 }
 
-function buildWeatherContext(data, granularity) {
+function buildWeatherContext(data) {
   const now = new Date(data.current.time);
   const [desc] = describeCode(data.current.weathercode);
-  const block = granularity === "minutely_15" ? data.minutely_15 : data.hourly;
-  const idxs = remainingTodayIndices(block.time, now);
+  const idxs = remainingTodayIndices(data.minutely_15.time, now);
 
-  const lines = idxs.map((i) => `${formatHour(block.time[i])}: ${block.temperature_2m[i].toFixed(1)}°C`);
+  const series = idxs
+    .map((i) => `${formatHour(data.minutely_15.time[i])}=${data.minutely_15.temperature_2m[i].toFixed(1)}`)
+    .join(",");
 
-  return [
-    `Current conditions: ${data.current.temperature_2m.toFixed(1)}°C, ${desc.toLowerCase()}, wind ${Math.round(data.current.wind_speed_10m)} km/h.`,
-    ``,
-    `Temperature forecast for the rest of today (${granularity === "minutely_15" ? "15-minute" : "hourly"} intervals):`,
-    ...lines,
-  ].join("\n");
+  return `Current: ${data.current.temperature_2m.toFixed(1)}C, ${desc.toLowerCase()}, wind ${Math.round(data.current.wind_speed_10m)}km/h. Temp forecast today (15-min, HH:MM=C): ${series}`;
 }
 
 // --- Model loading -------------------------------------------------------
-// Mirrors the prewarm pattern from chrome-chat: only auto-create a session
-// at startup when the model is already downloaded, never trigger a silent
-// download the visitor didn't ask for. A "downloadable" or "unavailable"
-// state still lets Ask be clicked — creation is attempted lazily then,
-// which is the visitor's own action triggering any download.
+// One session, created once, with the weather data baked into its system
+// prompt so it doesn't need re-sending on every question — kept alive so
+// follow-ups share context instead of starting fresh each time. Mirrors
+// chrome-chat's policy of only auto-creating at startup when the model is
+// already downloaded (never a silent download); a "downloadable" state
+// still lets Ask be clicked, and that click is what triggers the download,
+// with progress reported rather than a page that just looks stuck.
 
-let prewarmedSession = null; // Promise<session> | null
+let forecastPromise = null;
+let chatSession = null; // Promise<session> | null, persistent once created
 let promptOk = false;
 
 function setStatusPill(className, text) {
   const pill = document.getElementById("model-status-pill");
   pill.className = `stub-badge ${className}`;
   pill.textContent = text;
+}
+
+function logEntry(kind, text) {
+  const log = document.getElementById("ask-log");
+  const p = document.createElement("p");
+  p.className = `log-entry log-${kind}`;
+  p.textContent = text;
+  log.appendChild(p);
+  log.scrollTop = log.scrollHeight;
+  return p;
 }
 
 async function checkModelCapability() {
@@ -230,9 +241,7 @@ async function checkModelCapability() {
     setStatusPill(availability, availability === "downloadable" ? "needs download" : availability);
 
     if (availability === "available") {
-      prewarmedSession = LanguageModel.create({
-        initialPrompts: [{ role: "system", content: WEATHER_SYSTEM_PROMPT }],
-      });
+      ensureChatSession(); // fire and forget: warms the model before anyone's asked anything
     }
   } catch (err) {
     setStatusPill("unavailable", `error: ${err.message}`);
@@ -241,46 +250,57 @@ async function checkModelCapability() {
   document.getElementById("ask-submit").disabled = !promptOk;
 }
 
-async function getModelSession() {
-  if (prewarmedSession) {
-    const session = await prewarmedSession;
-    prewarmedSession = null;
+function ensureChatSession() {
+  if (chatSession) return chatSession;
+
+  chatSession = (async () => {
+    setStatusPill("preparing", "preparing model…");
+    const data = await forecastPromise;
+    const systemPrompt = `${WEATHER_SYSTEM_PROMPT}\n\n${buildWeatherContext(data)}`;
+
+    const session = await LanguageModel.create({
+      initialPrompts: [{ role: "system", content: systemPrompt }],
+      monitor(m) {
+        m.addEventListener("downloadprogress", (e) => {
+          const pct = Math.round(e.loaded * 100);
+          setStatusPill("preparing", `downloading model… ${pct}%`);
+          logEntry("status", `Downloading model… ${pct}%`);
+        });
+      },
+    });
+
+    setStatusPill("available", "ready");
     return session;
-  }
-  return LanguageModel.create({
-    initialPrompts: [{ role: "system", content: WEATHER_SYSTEM_PROMPT }],
-  });
+  })();
+
+  // Allow retrying: a failed creation shouldn't permanently wedge the app.
+  chatSession.catch(() => { chatSession = null; });
+
+  return chatSession;
 }
 
 function setupAsk() {
   const form = document.getElementById("ask-form");
   const input = document.getElementById("ask-input");
-  const output = document.getElementById("ask-response");
   const submitBtn = document.getElementById("ask-submit");
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const question = input.value.trim();
-    if (!question || !latestData) return;
+    if (!question) return;
 
-    const granularity = form.elements["granularity"].value;
-
-    output.hidden = false;
-    output.textContent = "Thinking…";
+    input.value = "";
+    logEntry("question", question);
     submitBtn.disabled = true;
 
-    let session;
     try {
-      session = await getModelSession();
-      const context = buildWeatherContext(latestData, granularity);
-      const answer = await session.prompt(`${context}\n\nQuestion: ${question}`);
-      output.textContent = answer;
+      const session = await ensureChatSession();
+      logEntry("status", "Thinking…");
+      const answer = await session.prompt(question);
+      logEntry("answer", answer);
     } catch (err) {
-      output.textContent = `Model error: ${err.message}`;
+      logEntry("error", `Error: ${err.message}`);
     } finally {
-      if (session) {
-        try { session.destroy(); } catch {}
-      }
       submitBtn.disabled = !promptOk;
     }
   });
@@ -288,4 +308,4 @@ function setupAsk() {
 
 setupAsk();
 checkModelCapability();
-loadForecast();
+forecastPromise = loadForecast();
