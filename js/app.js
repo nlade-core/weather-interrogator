@@ -131,18 +131,27 @@ function renderTodayChart(data) {
     time: data.hourly.time[idx],
   }));
 
+  // precipitation_probability describes the *preceding* hour (confirmed
+  // against Open-Meteo's docs) -- so the reading filed under "15:00"
+  // describes the window (14:00, 15:00], meaning it's the one actually in
+  // force at, say, 14:20, not the "14:00" reading (which describes the
+  // already-finished (13:00, 14:00]). Shift every reading back by one
+  // hour position before interpolating, so hour-mark anchors line up with
+  // what's upcoming rather than what just finished.
+  const shiftedTime = data.hourly.time.slice(0, -1);
+  const shiftedPrecip = data.hourly.precipitation_probability.slice(1);
+
   // Apple-style: precip is a faded wash behind the temperature line rather
   // than a separate band -- bar height is probability against the full
   // plot height (100% reaches the top), low-opacity so the line stays
   // readable through it. One bar per 15-min slot (matching the temp
   // line's grid), height linearly interpolated between the two bracketing
-  // hourly readings so it ramps smoothly rather than stepping at each
-  // hour boundary -- exact at the hour marks, blended in between.
+  // (shifted) hourly readings so it ramps smoothly rather than stepping.
   const quarterMs = 15 * 60 * 1000;
   const barWidth = Math.max((quarterMs / spanMs) * plotWidth * 0.82, 3);
   const bars = points
     .map((p) => {
-      const prob = interpolateHourly(data.hourly.time, data.hourly.precipitation_probability, new Date(p.time));
+      const prob = interpolateHourly(shiftedTime, shiftedPrecip, new Date(p.time));
       const barHeight = (prob / 100) * plotHeight;
       const y = plotHeight - barHeight;
       return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" class="precip-bar"><title>${formatHour(p.time)} — ${Math.round(prob)}% rain chance (smoothed)</title></rect>`;
@@ -179,7 +188,7 @@ function renderTodayChart(data) {
     </svg>
   `;
 
-  attachChartHover(wrap, points, data.hourly.time, data.hourly.precipitation_probability);
+  attachChartHover(wrap, points, shiftedTime, shiftedPrecip);
 }
 
 // Hourly readings are point samples, not step functions -- linearly
