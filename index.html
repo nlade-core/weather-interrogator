@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>weather-interrogator</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <h1>weather&#8209;interrogator</h1>
+  <p class="subtitle">Short-term forecast for Edinburgh, pulled straight from Open-Meteo. Raw on the left, navigated on the right.</p>
+</header>
+
+<main>
+  <section id="status" class="status" aria-live="polite">Loading forecast&hellip;</section>
+
+  <section class="panels">
+    <div class="panel">
+      <h2>Raw</h2>
+      <pre id="raw-output" class="raw-output">&hellip;</pre>
+    </div>
+
+    <div class="panel">
+      <h2>Pretty</h2>
+      <div id="current-card" class="current-card"></div>
+      <table id="forecast-table" class="forecast-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Conditions</th>
+            <th>Temp</th>
+            <th>Rain chance</th>
+            <th>Wind</th>
+          </tr>
+        </thead>
+        <tbody id="forecast-body"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <p>Data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>. No API key, no tracking, no LLM (yet).</p>
+</footer>
+
+<script src="js/app.js"></script>
+</body>
+</html>
