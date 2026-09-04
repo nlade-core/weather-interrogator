@@ -151,11 +151,13 @@ function renderTodayChart(data) {
     return;
   }
 
+  // Default axis range 0-25°C -- covers the vast majority of Edinburgh
+  // days and reads in round numbers, rather than tightly auto-fitting to
+  // whatever narrow slice "today" happens to span. Stretches (never
+  // clips) for the rare day that goes outside it.
   const temps = tempIdxs.map((i) => data.minutely_15.temperature_2m[i]);
-  const rawMin = Math.min(...temps);
-  const rawMax = Math.max(...temps);
-  const min = rawMin === rawMax ? rawMin - 1 : rawMin;
-  const max = rawMin === rawMax ? rawMax + 1 : rawMax;
+  const min = Math.min(0, ...temps);
+  const max = Math.max(25, ...temps);
 
   const { width, padLeft, padRight, iconRowHeight, plotHeight, axisLabelHeight } = CHART;
   const plotWidth = width - padLeft - padRight;
@@ -253,11 +255,17 @@ function renderTodayChart(data) {
   // hourly axis labels below. weathercode is hourly, so the icon repeats
   // up to 4x within an hour rather than fabricating 15-min detail that
   // doesn't exist -- that repetition is honest, not a bug.
+  //
+  // Icons ride the temperature line itself (Yr-style) rather than sitting
+  // in a fixed row -- a little above each point. Clamped to a minimum y
+  // so a point near the top of the 0-25° range can't push its icon off
+  // the top edge, the same clipping issue the old inline temp labels hit.
   const conditionIcons = points
     .map((p) => {
       const code = weathercodeAt(data.hourly.time, data.hourly.weathercode, new Date(p.time));
       const icon = describeCode(code)[1];
-      return `<text x="${p.x.toFixed(1)}" y="${(iconRowHeight - 6).toFixed(1)}" class="chart-icon-label" text-anchor="middle">${icon}</text>`;
+      const y = Math.max(p.yTemp - 12, 10);
+      return `<text x="${p.x.toFixed(1)}" y="${y.toFixed(1)}" class="chart-icon-label" text-anchor="middle">${icon}</text>`;
     })
     .join("");
 
