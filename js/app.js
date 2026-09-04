@@ -166,17 +166,16 @@ function renderTodayChart(data) {
   }
 
   // Axis bounds round to nice numbers rather than hugging the data exactly:
-  // bottom floors to the nearest multiple of 10 at or below the data min,
-  // top ceils to the nearest multiple of 5 at or above the data max (e.g.
-  // a min of 14 -> 10, a max of 19 -> 20). Guards against the degenerate
-  // case where both round to the same value (a flat day sitting exactly
-  // on a multiple of 10).
+  // both bottom and top round to the nearest multiple of 10 (floor/ceil
+  // respectively) around the data range (e.g. min 14 -> 10, max 19 -> 20).
+  // Guards against the degenerate case where both round to the same value
+  // (a flat day sitting exactly on a multiple of 10).
   const temps = tempIdxs.map((i) => data.minutely_15.temperature_2m[i]);
   const rawMin = Math.min(...temps);
   const rawMax = Math.max(...temps);
   const min = Math.floor(rawMin / 10) * 10;
-  let max = Math.ceil(rawMax / 5) * 5;
-  if (max <= min) max = min + 5;
+  let max = Math.ceil(rawMax / 10) * 10;
+  if (max <= min) max = min + 10;
 
   const { width, padLeft, padRight, topStripHeight, plotHeight, axisLabelHeight } = CHART;
   const plotWidth = width - padLeft - padRight;
