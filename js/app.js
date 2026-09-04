@@ -60,26 +60,96 @@ function renderCurrent(data) {
   `;
 }
 
-function renderForecastTable(data) {
-  const { time, temperature_2m, precipitation_probability, weathercode, windspeed_10m } = data.hourly;
-  const nowIndex = time.findIndex((t) => new Date(t) >= new Date(data.current.time));
-  const start = nowIndex === -1 ? 0 : nowIndex;
-  const rows = [];
+const CHART = {
+  width: 760,
+  padX: 28,
+  tempBandHeight: 150,
+  bandGap: 8,
+  precipBandHeight: 64,
+  labelHeight: 28,
+};
 
-  for (let i = start; i < Math.min(start + 24, time.length); i++) {
-    const [desc, icon] = describeCode(weathercode[i]);
-    rows.push(`
-      <tr>
-        <td>${formatHour(time[i])}</td>
-        <td>${icon} ${desc}</td>
-        <td>${Math.round(temperature_2m[i])}&deg;C</td>
-        <td>${precipitation_probability[i]}%</td>
-        <td>${Math.round(windspeed_10m[i])} km/h</td>
-      </tr>
-    `);
+function todaysRemainingIndices(data) {
+  const now = new Date(data.current.time);
+  const midnight = new Date(now);
+  midnight.setHours(24, 0, 0, 0);
+
+  const idxs = [];
+  data.hourly.time.forEach((t, i) => {
+    const ts = new Date(t);
+    if (ts >= now && ts < midnight) idxs.push(i);
+  });
+  return idxs;
+}
+
+function renderTodayChart(data) {
+  const wrap = document.getElementById("today-chart");
+  const idxs = todaysRemainingIndices(data);
+
+  if (idxs.length < 2) {
+    wrap.innerHTML = `<p class="chart-empty">Not much of today left to chart &mdash; check back after midnight.</p>`;
+    return;
   }
 
-  document.getElementById("forecast-body").innerHTML = rows.join("");
+  const { time, temperature_2m, precipitation_probability } = data.hourly;
+  const temps = idxs.map((i) => temperature_2m[i]);
+  const rawMin = Math.min(...temps);
+  const rawMax = Math.max(...temps);
+  const min = rawMin === rawMax ? rawMin - 1 : rawMin;
+  const max = rawMin === rawMax ? rawMax + 1 : rawMax;
+
+  const { width, padX, tempBandHeight, bandGap, precipBandHeight, labelHeight } = CHART;
+  const plotWidth = width - padX * 2;
+  const height = tempBandHeight + bandGap + precipBandHeight + labelHeight;
+  const precipTop = tempBandHeight + bandGap;
+
+  const x = (i) => padX + (idxs.length === 1 ? plotWidth / 2 : (i / (idxs.length - 1)) * plotWidth);
+  const yTemp = (t) => tempBandHeight - ((t - min) / (max - min)) * tempBandHeight;
+
+  const points = idxs.map((idx, i) => ({
+    idx,
+    x: x(i),
+    yTemp: yTemp(temperature_2m[idx]),
+    temp: temperature_2m[idx],
+    precip: precipitation_probability[idx],
+    time: time[idx],
+  }));
+
+  const linePath = points.map((p) => `${p.x.toFixed(1)},${p.yTemp.toFixed(1)}`).join(" ");
+
+  const barWidth = Math.max((plotWidth / idxs.length) * 0.55, 4);
+  const bars = points
+    .map((p) => {
+      const barHeight = (p.precip / 100) * precipBandHeight;
+      const y = precipTop + (precipBandHeight - barHeight);
+      return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" class="precip-bar"><title>${formatHour(p.time)} — ${p.precip}% rain chance</title></rect>`;
+    })
+    .join("");
+
+  const labelStep = Math.max(1, Math.ceil(points.length / 8));
+  const labeled = points.filter((_, i) => i % labelStep === 0 || i === points.length - 1);
+
+  const hourLabels = labeled
+    .map((p) => `<text x="${p.x.toFixed(1)}" y="${height - 6}" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
+    .join("");
+
+  const tempLabels = labeled
+    .map((p) => `<text x="${p.x.toFixed(1)}" y="${(p.yTemp - 10).toFixed(1)}" class="chart-temp-label" text-anchor="middle">${Math.round(p.temp)}&deg;</text>`)
+    .join("");
+
+  const dots = points
+    .map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.yTemp.toFixed(1)}" r="3" class="chart-dot"><title>${formatHour(p.time)} — ${Math.round(p.temp)}&deg;C, ${p.precip}% rain chance</title></circle>`)
+    .join("");
+
+  wrap.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature and rain chance for the rest of today">
+      <g class="precip-band">${bars}</g>
+      <polyline points="${linePath}" class="chart-line" fill="none" />
+      ${dots}
+      ${tempLabels}
+      ${hourLabels}
+    </svg>
+  `;
 }
 
 function renderRaw(data) {
@@ -95,13 +165,29 @@ async function loadForecast() {
 
     renderRaw(data);
     renderCurrent(data);
-    renderForecastTable(data);
+    renderTodayChart(data);
 
-    statusEl.textContent = `Updated ${new Date().toLocaleTimeString("en-GB")} — next 24h for Edinburgh (${data.latitude.toFixed(2)}, ${data.longitude.toFixed(2)})`;
+    statusEl.textContent = `Updated ${new Date().toLocaleTimeString("en-GB")} — Edinburgh (${data.latitude.toFixed(2)}, ${data.longitude.toFixed(2)})`;
   } catch (err) {
     statusEl.textContent = `Failed to load forecast: ${err.message}`;
     statusEl.classList.add("error");
   }
 }
 
+function setupAskStub() {
+  const form = document.getElementById("ask-form");
+  const input = document.getElementById("ask-input");
+  const output = document.getElementById("ask-response");
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const question = input.value.trim();
+    if (!question) return;
+
+    output.hidden = false;
+    output.textContent = `"${question}" — this is where Chrome's on-device model will answer, once it's wired up. No LLM call was made.`;
+  });
+}
+
+setupAskStub();
 loadForecast();

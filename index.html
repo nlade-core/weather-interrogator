@@ -10,35 +10,32 @@
 
 <header class="site-header">
   <h1>weather&#8209;interrogator</h1>
-  <p class="subtitle">Short-term forecast for Edinburgh, pulled straight from Open-Meteo. Raw on the left, navigated on the right.</p>
+  <p class="subtitle">Short-term forecast for Edinburgh, pulled straight from Open-Meteo.</p>
 </header>
 
 <main>
   <section id="status" class="status" aria-live="polite">Loading forecast&hellip;</section>
 
-  <section class="panels">
-    <div class="panel">
-      <h2>Raw</h2>
-      <pre id="raw-output" class="raw-output">&hellip;</pre>
-    </div>
-
-    <div class="panel">
-      <h2>Pretty</h2>
-      <div id="current-card" class="current-card"></div>
-      <table id="forecast-table" class="forecast-table">
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Conditions</th>
-            <th>Temp</th>
-            <th>Rain chance</th>
-            <th>Wind</th>
-          </tr>
-        </thead>
-        <tbody id="forecast-body"></tbody>
-      </table>
-    </div>
+  <section class="panel">
+    <div id="current-card" class="current-card"></div>
+    <h2>Rest of today</h2>
+    <div id="today-chart" class="chart-wrap"></div>
   </section>
+
+  <section class="panel llm-stub">
+    <h2>Ask <span class="stub-badge">placeholder</span></h2>
+    <p class="stub-note">Not wired to a model yet &mdash; reserving the spot for Chrome's on-device (Gemini Nano) prompt API. Submitting below returns a canned response.</p>
+    <form id="ask-form" class="ask-form">
+      <input id="ask-input" type="text" placeholder="e.g. Is it worth a BBQ this weekend?" autocomplete="off">
+      <button type="submit">Ask</button>
+    </form>
+    <div id="ask-response" class="ask-response" hidden></div>
+  </section>
+
+  <details class="panel raw-details">
+    <summary>Raw response</summary>
+    <pre id="raw-output" class="raw-output">&hellip;</pre>
+  </details>
 </main>
 
 <footer class="site-footer">

@@ -10,6 +10,7 @@ img, svg { display: block; max-width: 100%; }
   --text: #e7e9ee;
   --muted: #8b93a3;
   --accent: #5fb4ff;
+  --temp: #ffb454;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -31,14 +32,10 @@ body {
 .status { margin-bottom: 1rem; color: var(--muted); font-size: 0.9rem; }
 .status.error { color: #ff8080; }
 
-.panels {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+main {
+  display: flex;
+  flex-direction: column;
   gap: 1.25rem;
-}
-
-@media (max-width: 760px) {
-  .panels { grid-template-columns: 1fr; }
 }
 
 .panel {
@@ -80,26 +77,97 @@ body {
 .current-card .temp { font-size: 1.8rem; font-weight: 600; }
 .current-card .desc { color: var(--muted); }
 
-.forecast-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.85rem;
+.chart-wrap { width: 100%; }
+
+.chart-svg { width: 100%; height: auto; }
+
+.chart-line {
+  stroke: var(--temp);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
 }
 
-.forecast-table th {
-  text-align: left;
+.chart-dot { fill: var(--temp); }
+
+.chart-temp-label {
+  fill: var(--text);
+  font-size: 11px;
+}
+
+.chart-axis-label {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.precip-bar { fill: var(--accent); opacity: 0.55; }
+
+.chart-empty { color: var(--muted); font-size: 0.9rem; }
+
+.llm-stub .stub-badge {
+  text-transform: none;
+  letter-spacing: normal;
+  background: var(--border);
   color: var(--muted);
-  font-weight: 500;
-  padding: 0.4rem 0.5rem;
-  border-bottom: 1px solid var(--border);
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  margin-left: 0.4rem;
 }
 
-.forecast-table td {
-  padding: 0.4rem 0.5rem;
-  border-bottom: 1px solid var(--border);
+.stub-note {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
 }
 
-.forecast-table tbody tr:hover { background: rgba(255,255,255,0.03); }
+.ask-form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.ask-form input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.7rem;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.9rem;
+}
+
+.ask-form input:focus { outline: 1px solid var(--accent); }
+
+.ask-form button {
+  background: var(--accent);
+  color: #0f1115;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ask-response {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.raw-details summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.raw-details .raw-output { margin-top: 0.75rem; }
 
 .site-footer {
   margin-top: 1.5rem;
