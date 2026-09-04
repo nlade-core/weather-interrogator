@@ -88,8 +88,6 @@ main {
   stroke-linecap: round;
 }
 
-.chart-dot { fill: var(--temp); }
-
 .chart-temp-label {
   fill: var(--text);
   font-size: 11px;

@@ -11,7 +11,8 @@ Weather APIs return a wall of hourly arrays. Most questions people actually have
 ## MVP (current)
 
 - Fetch Open-Meteo's forecast endpoint for Edinburgh: current conditions, hourly, and 15-minutely temperature through midnight
-- Chart temperature and rain chance for the rest of today (hourly); raw JSON available collapsed
+- Chart shows temperature at 15-minute resolution (a visibly smoother, more precise line than hourly) with hourly rain-probability bars underneath, both placed on one shared time axis so the two resolutions line up correctly; raw JSON available collapsed
+- Custom hover (dashed guide line, snapped highlight, floating tooltip) instead of native title-tooltips — same interaction pattern as Plotly/Yr, hand-rolled with no charting library
 - "Ask" is wired to Chrome's built-in Gemini Nano (Prompt API) — on-device, no server. Edinburgh's 15-minute temperature forecast for the rest of today is baked into one persistent session's system prompt at creation time, so follow-up questions share context instead of starting fresh each time
 - The model is pre-warmed at page load when it's already downloaded; a "downloadable" state waits for your first Ask click to trigger anything, with real download-progress percentages shown rather than a page that just looks stuck
 - A visible log (status pill + a running log under Ask) surfaces every state transition — preparing, downloading, thinking, error — instead of failing silently

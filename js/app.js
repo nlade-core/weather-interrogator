@@ -86,15 +86,20 @@ function remainingTodayIndices(times, now) {
 
 function renderTodayChart(data) {
   const wrap = document.getElementById("today-chart");
-  const idxs = remainingTodayIndices(data.hourly.time, new Date(data.current.time));
+  const now = new Date(data.current.time);
+  const midnight = new Date(now);
+  midnight.setHours(24, 0, 0, 0);
+  const spanMs = midnight - now;
 
-  if (idxs.length < 2) {
+  const tempIdxs = remainingTodayIndices(data.minutely_15.time, now);
+  const precipIdxs = remainingTodayIndices(data.hourly.time, now);
+
+  if (tempIdxs.length < 2) {
     wrap.innerHTML = `<p class="chart-empty">Not much of today left to chart &mdash; check back after midnight.</p>`;
     return;
   }
 
-  const { time, temperature_2m, precipitation_probability } = data.hourly;
-  const temps = idxs.map((i) => temperature_2m[i]);
+  const temps = tempIdxs.map((i) => data.minutely_15.temperature_2m[i]);
   const rawMin = Math.min(...temps);
   const rawMax = Math.max(...temps);
   const min = rawMin === rawMax ? rawMin - 1 : rawMin;
@@ -105,22 +110,31 @@ function renderTodayChart(data) {
   const height = tempBandHeight + bandGap + precipBandHeight + labelHeight;
   const precipTop = tempBandHeight + bandGap;
 
-  const x = (i) => padX + (idxs.length === 1 ? plotWidth / 2 : (i / (idxs.length - 1)) * plotWidth);
+  // Temperature (15-min) and precipitation (hourly) are different native
+  // resolutions, so they're placed on one shared axis by actual elapsed
+  // time rather than by array index -- that's what keeps a 14:15 point on
+  // the line lining up under the right third of the 14:00-15:00 bar.
+  const xForTime = (t) => padX + ((t - now) / spanMs) * plotWidth;
   const yTemp = (t) => tempBandHeight - ((t - min) / (max - min)) * tempBandHeight;
 
-  const points = idxs.map((idx, i) => ({
-    idx,
-    x: x(i),
-    yTemp: yTemp(temperature_2m[idx]),
-    temp: temperature_2m[idx],
-    precip: precipitation_probability[idx],
-    time: time[idx],
+  const points = tempIdxs.map((idx) => ({
+    x: xForTime(new Date(data.minutely_15.time[idx])),
+    yTemp: yTemp(data.minutely_15.temperature_2m[idx]),
+    temp: data.minutely_15.temperature_2m[idx],
+    time: data.minutely_15.time[idx],
   }));
 
   const linePath = points.map((p) => `${p.x.toFixed(1)},${p.yTemp.toFixed(1)}`).join(" ");
 
-  const barWidth = Math.max((plotWidth / idxs.length) * 0.55, 4);
-  const bars = points
+  const precipPoints = precipIdxs.map((idx) => ({
+    x: xForTime(new Date(data.hourly.time[idx])),
+    precip: data.hourly.precipitation_probability[idx],
+    time: data.hourly.time[idx],
+  }));
+
+  const hourMs = 60 * 60 * 1000;
+  const barWidth = Math.max((hourMs / spanMs) * plotWidth * 0.7, 4);
+  const bars = precipPoints
     .map((p) => {
       const barHeight = (p.precip / 100) * precipBandHeight;
       const y = precipTop + (precipBandHeight - barHeight);
@@ -128,26 +142,27 @@ function renderTodayChart(data) {
     })
     .join("");
 
-  const labelStep = Math.max(1, Math.ceil(points.length / 8));
-  const labeled = points.filter((_, i) => i % labelStep === 0 || i === points.length - 1);
+  // Axis + value labels stay anchored to the coarser hourly marks --
+  // labelling every 15-min point would be unreadable clutter.
+  const labelStep = Math.max(1, Math.ceil(precipPoints.length / 8));
+  const labeled = precipPoints.filter((_, i) => i % labelStep === 0 || i === precipPoints.length - 1);
 
   const hourLabels = labeled
     .map((p) => `<text x="${p.x.toFixed(1)}" y="${height - 6}" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
     .join("");
 
   const tempLabels = labeled
-    .map((p) => `<text x="${p.x.toFixed(1)}" y="${(p.yTemp - 10).toFixed(1)}" class="chart-temp-label" text-anchor="middle">${Math.round(p.temp)}&deg;</text>`)
-    .join("");
-
-  const dots = points
-    .map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.yTemp.toFixed(1)}" r="3" class="chart-dot"><title>${formatHour(p.time)} — ${Math.round(p.temp)}&deg;C, ${p.precip}% rain chance</title></circle>`)
+    .map((p) => {
+      const hIdx = data.hourly.time.indexOf(p.time);
+      const t = data.hourly.temperature_2m[hIdx];
+      return `<text x="${p.x.toFixed(1)}" y="${(yTemp(t) - 10).toFixed(1)}" class="chart-temp-label" text-anchor="middle">${Math.round(t)}&deg;</text>`;
+    })
     .join("");
 
   wrap.innerHTML = `
     <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature and rain chance for the rest of today">
       <g class="precip-band">${bars}</g>
       <polyline points="${linePath}" class="chart-line" fill="none" />
-      ${dots}
       ${tempLabels}
       ${hourLabels}
       <line class="hover-guide" x1="0" x2="0" y1="0" y2="${tempBandHeight}" />
@@ -156,10 +171,19 @@ function renderTodayChart(data) {
     </svg>
   `;
 
-  attachChartHover(wrap, points);
+  attachChartHover(wrap, points, precipPoints);
 }
 
-function attachChartHover(wrap, points) {
+function precipForTime(precipPoints, time) {
+  let match = precipPoints[0];
+  for (const p of precipPoints) {
+    if (new Date(p.time) <= time) match = p;
+    else break;
+  }
+  return match;
+}
+
+function attachChartHover(wrap, points, precipPoints) {
   const svg = wrap.querySelector(".chart-svg");
   const guide = svg.querySelector(".hover-guide");
   const hoverDot = svg.querySelector(".hover-dot");
@@ -184,6 +208,7 @@ function attachChartHover(wrap, points) {
     const scale = CHART.width / rect.width;
     const svgX = (evt.clientX - rect.left) * scale;
     const p = nearestPoint(svgX);
+    const precip = precipForTime(precipPoints, new Date(p.time));
 
     guide.setAttribute("x1", p.x);
     guide.setAttribute("x2", p.x);
@@ -193,7 +218,7 @@ function attachChartHover(wrap, points) {
     hoverDot.setAttribute("cy", p.yTemp);
     hoverDot.classList.add("visible");
 
-    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong> at ${formatHour(p.time)}<br>${p.precip}% rain chance`;
+    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong> at ${formatHour(p.time)}<br>${precip.precip}% rain chance (${formatHour(precip.time)} hour)`;
     tooltip.classList.add("visible");
 
     const screenX = rect.left + p.x / scale;
