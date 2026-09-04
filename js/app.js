@@ -8,7 +8,7 @@ FORECAST_URL.search = new URLSearchParams({
   forecast_days: "2",
   current: "temperature_2m,weathercode,wind_speed_10m,precipitation",
   hourly: "temperature_2m,precipitation_probability,weathercode,windspeed_10m",
-  minutely_15: "temperature_2m",
+  minutely_15: "temperature_2m,precipitation",
 });
 
 let latestData = null; // most recent fetch, read by the ask handler when building model context
@@ -135,11 +135,19 @@ function renderTodayChart(data) {
   const xForTime = (t) => padX + ((t - now) / spanMs) * plotWidth;
   const yTemp = (t) => plotHeight - ((t - min) / (max - min)) * plotHeight;
 
+  // precipitation (mm) at 15-min resolution also describes the *preceding*
+  // interval (confirmed against the docs, same convention as the hourly
+  // probability field) -- so the reading at minutely_15 index (idx+1) is
+  // the one actually in force during this bar's slot, not index idx.
+  const mmAt = (idx) => data.minutely_15.precipitation[idx + 1] ?? 0;
+
   const points = tempIdxs.map((idx) => ({
+    idx,
     x: xForTime(new Date(data.minutely_15.time[idx])),
     yTemp: yTemp(data.minutely_15.temperature_2m[idx]),
     temp: data.minutely_15.temperature_2m[idx],
     time: data.minutely_15.time[idx],
+    mm: mmAt(idx),
   }));
 
   const linePath = points.map((p) => `${p.x.toFixed(1)},${p.yTemp.toFixed(1)}`).join(" ");
@@ -162,12 +170,27 @@ function renderTodayChart(data) {
   const shiftedTime = data.hourly.time.slice(0, -1);
   const shiftedPrecip = data.hourly.precipitation_probability.slice(1);
 
+  // Height = probability (how likely), colour = type (rain/snow/storm),
+  // opacity = intensity (how much, in mm) -- three independent channels
+  // rather than conflating "likely" and "heavy" into one. Floor keeps a
+  // high-probability-but-negligible-amount slot faintly visible instead
+  // of invisible; ceiling is reached around 2mm/15min (~8mm/hr, solidly
+  // "heavy rain" territory) so it doesn't take an extreme event to read
+  // as bold.
+  const OPACITY_FLOOR = 0.12;
+  const OPACITY_CEILING = 0.85;
+  const HEAVY_MM = 2.0;
+  const opacityForMm = (mm) => {
+    const fraction = Math.min(mm / HEAVY_MM, 1);
+    return OPACITY_FLOOR + fraction * (OPACITY_CEILING - OPACITY_FLOOR);
+  };
+
   // Apple-style: precip is a faded wash behind the temperature line rather
   // than a separate band -- bar height is probability against the full
-  // plot height (100% reaches the top), low-opacity so the line stays
-  // readable through it. One bar per 15-min slot (matching the temp
-  // line's grid), height linearly interpolated between the two bracketing
-  // (shifted) hourly readings so it ramps smoothly rather than stepping.
+  // plot height (100% reaches the top). One bar per 15-min slot (matching
+  // the temp line's grid), height linearly interpolated between the two
+  // bracketing (shifted) hourly readings so it ramps smoothly rather than
+  // stepping.
   const quarterMs = 15 * 60 * 1000;
   const barWidth = Math.max((quarterMs / spanMs) * plotWidth * 0.82, 3);
   const bars = points
@@ -176,9 +199,10 @@ function renderTodayChart(data) {
       const prob = interpolateHourly(shiftedTime, shiftedPrecip, t);
       const code = weathercodeAt(data.hourly.time, data.hourly.weathercode, t);
       const family = precipFamily(code);
+      const opacity = opacityForMm(p.mm);
       const barHeight = (prob / 100) * plotHeight;
       const y = plotHeight - barHeight;
-      return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" class="precip-bar precip-${family}"><title>${formatHour(p.time)} — ${Math.round(prob)}% chance, ${describeCode(code)[0].toLowerCase()} (smoothed)</title></rect>`;
+      return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" fill-opacity="${opacity.toFixed(2)}" class="precip-bar precip-${family}"><title>${formatHour(p.time)} — ${Math.round(prob)}% chance, ${p.mm.toFixed(1)}mm, ${describeCode(code)[0].toLowerCase()} (smoothed)</title></rect>`;
     })
     .join("");
 
@@ -283,7 +307,7 @@ function attachChartHover(wrap, points, hourlyTime, hourlyPrecip, rawHourlyTime,
     hoverDot.setAttribute("cy", p.yTemp);
     hoverDot.classList.add("visible");
 
-    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong> at ${formatHour(p.time)}<br>${precip}% chance &middot; ${icon} ${desc.toLowerCase()}`;
+    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong> at ${formatHour(p.time)}<br>${precip}% chance, ${p.mm.toFixed(1)}mm &middot; ${icon} ${desc.toLowerCase()}`;
     tooltip.classList.add("visible");
 
     const screenX = rect.left + p.x / scale;

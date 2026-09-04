@@ -103,9 +103,11 @@ main {
 
 .chart-icon-label { font-size: 13px; text-anchor: middle; }
 
-.precip-bar { fill: var(--precip); opacity: 0.28; }
-.precip-bar.precip-snow { fill: var(--precip-snow); opacity: 0.4; }
-.precip-bar.precip-storm { fill: var(--precip-storm); opacity: 0.4; }
+/* Opacity is set per-bar via the fill-opacity attribute (scaled by mm
+   intensity) -- CSS only sets the hue per type, so the two don't compound. */
+.precip-bar { fill: var(--precip); }
+.precip-bar.precip-snow { fill: var(--precip-snow); }
+.precip-bar.precip-storm { fill: var(--precip-storm); }
 
 .chart-empty { color: var(--muted); font-size: 0.9rem; }
 
