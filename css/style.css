@@ -107,9 +107,11 @@ main {
 
 /* Opacity is set per-bar via the fill-opacity attribute (scaled by mm
    intensity) -- CSS only sets the hue per type, so the two don't compound. */
-.precip-bar { fill: var(--precip); }
-.precip-bar.precip-snow { fill: var(--precip-snow); }
-.precip-bar.precip-storm { fill: var(--precip-storm); }
+/* Height now carries amount directly, so opacity is flat per type rather
+   than a second amount-encoding -- no fill-opacity attribute anymore. */
+.precip-bar { fill: var(--precip); opacity: 0.5; }
+.precip-bar.precip-snow { fill: var(--precip-snow); opacity: 0.6; }
+.precip-bar.precip-storm { fill: var(--precip-storm); opacity: 0.6; }
 
 .chart-empty { color: var(--muted); font-size: 0.9rem; }
 

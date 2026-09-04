@@ -1,13 +1,20 @@
 const EDINBURGH = { latitude: 55.9533, longitude: -3.1883 };
 
 const FORECAST_URL = new URL("https://api.open-meteo.com/v1/forecast");
+// Pinned to the explicit UK model rather than best_match: same grid cell,
+// same values for every field that's genuinely UKV (confirmed identical
+// lat/lon/elevation either way) -- but a field UKV can't provide (like
+// precipitation_probability, which needs an ensemble UKV doesn't have)
+// comes back null instead of best_match silently substituting a
+// mismatched ~27km source and us displaying it as if it were local.
 FORECAST_URL.search = new URLSearchParams({
   latitude: EDINBURGH.latitude,
   longitude: EDINBURGH.longitude,
   timezone: "Europe/London",
   forecast_days: "2",
+  models: "ukmo_uk_deterministic_2km",
   current: "temperature_2m,weathercode,wind_speed_10m,precipitation",
-  hourly: "temperature_2m,precipitation_probability,weathercode,windspeed_10m",
+  hourly: "temperature_2m,weathercode,windspeed_10m",
   minutely_15: "temperature_2m,precipitation",
 });
 
@@ -122,8 +129,6 @@ function niceTemperatureTicks(min, max) {
   return ticks;
 }
 
-const PRECIP_AXIS_TICKS = [0, 25, 50, 75, 100];
-
 function remainingTodayIndices(times, now) {
   const midnight = new Date(now);
   midnight.setHours(24, 0, 0, 0);
@@ -193,57 +198,33 @@ function renderTodayChart(data) {
 
   const linePath = points.map((p) => `${p.x.toFixed(1)},${p.yTemp.toFixed(1)}`).join(" ");
 
-  // Hourly probability values, kept as-is for the hover tooltip lookup --
-  // this is the real native resolution, no finer probability data exists.
+  // Hour-mark positions for the bottom axis labels -- just time/x, no
+  // probability attached (that field is gone; see the fetch config note).
   const precipPoints = precipIdxs.map((idx) => ({
     x: xForTime(new Date(data.hourly.time[idx])),
-    precip: data.hourly.precipitation_probability[idx],
     time: data.hourly.time[idx],
   }));
 
-  // precipitation_probability describes the *preceding* hour (confirmed
-  // against Open-Meteo's docs) -- so the reading filed under "15:00"
-  // describes the window (14:00, 15:00], meaning it's the one actually in
-  // force at, say, 14:20, not the "14:00" reading (which describes the
-  // already-finished (13:00, 14:00]). Shift every reading back by one
-  // hour position before interpolating, so hour-mark anchors line up with
-  // what's upcoming rather than what just finished.
-  const shiftedTime = data.hourly.time.slice(0, -1);
-  const shiftedPrecip = data.hourly.precipitation_probability.slice(1);
+  // Bar height is predicted amount (mm) directly rather than probability --
+  // probability isn't fetched at all now (pinned to the UKV model, which
+  // can't produce it; see the fetch config note). Amount is real UKV data,
+  // 15-min native resolution, no shifting or interpolation needed. Ceiling
+  // at 3mm/15min (~12mm/hr) is solidly "heavy rain" territory -- reaching
+  // full height doesn't require an extreme event. Colour still carries
+  // type (rain/snow/storm); opacity is now flat per type rather than a
+  // second amount-encoding, since height alone already carries amount.
+  const HEIGHT_MAX_MM = 3.0;
 
-  // Height = probability (how likely), colour = type (rain/snow/storm),
-  // opacity = intensity (how much, in mm) -- three independent channels
-  // rather than conflating "likely" and "heavy" into one. Floor keeps a
-  // high-probability-but-negligible-amount slot faintly visible instead
-  // of invisible; ceiling is reached around 2mm/15min (~8mm/hr, solidly
-  // "heavy rain" territory) so it doesn't take an extreme event to read
-  // as bold.
-  const OPACITY_FLOOR = 0.12;
-  const OPACITY_CEILING = 0.85;
-  const HEAVY_MM = 2.0;
-  const opacityForMm = (mm) => {
-    const fraction = Math.min(mm / HEAVY_MM, 1);
-    return OPACITY_FLOOR + fraction * (OPACITY_CEILING - OPACITY_FLOOR);
-  };
-
-  // Apple-style: precip is a faded wash behind the temperature line rather
-  // than a separate band -- bar height is probability against the full
-  // plot height (100% reaches the top). One bar per 15-min slot (matching
-  // the temp line's grid), height linearly interpolated between the two
-  // bracketing (shifted) hourly readings so it ramps smoothly rather than
-  // stepping.
   const quarterMs = 15 * 60 * 1000;
   const barWidth = Math.max((quarterMs / spanMs) * plotWidth * 0.82, 3);
   const bars = points
     .map((p) => {
       const t = new Date(p.time);
-      const prob = interpolateHourly(shiftedTime, shiftedPrecip, t);
       const code = weathercodeAt(data.hourly.time, data.hourly.weathercode, t);
       const family = precipFamily(code);
-      const opacity = opacityForMm(p.mm);
-      const barHeight = (prob / 100) * plotHeight;
+      const barHeight = Math.min(p.mm / HEIGHT_MAX_MM, 1) * plotHeight;
       const y = plotTop + plotHeight - barHeight;
-      return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" fill-opacity="${opacity.toFixed(2)}" class="precip-bar precip-${family}"><title>${formatHour(p.time)} — ${Math.round(prob)}% chance, ${p.mm.toFixed(1)}mm, ${describeCode(code)[0].toLowerCase()} (smoothed)</title></rect>`;
+      return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" class="precip-bar precip-${family}"><title>${formatHour(p.time)} — ${p.mm.toFixed(1)}mm, ${describeCode(code)[0].toLowerCase()}</title></rect>`;
     })
     .join("");
 
@@ -275,9 +256,9 @@ function renderTodayChart(data) {
     .join("");
 
   // Temperature axis (left): "nice" round-number ticks, not raw data
-  // extremes. Precip axis (right): fixed 0/25/50/75/100% -- that's what
-  // bar *height* encodes; type (colour) and intensity (opacity) aren't
-  // positional, so they don't need an axis.
+  // extremes. Precip axis (right): fixed mm ticks matching HEIGHT_MAX_MM --
+  // that's what bar *height* now encodes; type (colour) isn't positional,
+  // so it doesn't need an axis.
   const tempAxis = niceTemperatureTicks(min, max)
     .map((tv) => {
       const ty = yTemp(tv);
@@ -288,19 +269,19 @@ function renderTodayChart(data) {
     })
     .join("");
 
-  const precipAxis = PRECIP_AXIS_TICKS
+  const precipAxis = [0, 1, 2, 3]
     .map((tv) => {
-      const ty = plotTop + plotHeight - (tv / 100) * plotHeight;
+      const ty = plotTop + plotHeight - (tv / HEIGHT_MAX_MM) * plotHeight;
       const xRight = padLeft + plotWidth;
       return (
         `<line x1="${xRight}" x2="${(xRight + 4).toFixed(1)}" y1="${ty.toFixed(1)}" y2="${ty.toFixed(1)}" class="axis-tick" />` +
-        `<text x="${(xRight + 7).toFixed(1)}" y="${(ty + 3).toFixed(1)}" class="axis-tick-label" text-anchor="start">${tv}%</text>`
+        `<text x="${(xRight + 7).toFixed(1)}" y="${(ty + 3).toFixed(1)}" class="axis-tick-label" text-anchor="start">${tv}mm</text>`
       );
     })
     .join("");
 
   wrap.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature and rain chance for the rest of today">
+    <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature and rainfall for the rest of today">
       <g class="precip-band">${bars}</g>
       <polyline points="${linePath}" class="chart-line" fill="none" />
       ${conditionIcons}
@@ -313,31 +294,10 @@ function renderTodayChart(data) {
     </svg>
   `;
 
-  attachChartHover(wrap, points, shiftedTime, shiftedPrecip, data.hourly.time, data.hourly.weathercode);
+  attachChartHover(wrap, points, data.hourly.time, data.hourly.weathercode);
 }
 
-// Hourly readings are point samples, not step functions -- linearly
-// interpolating between the two bracketing hours gives a continuous
-// value with no fabricated precision beyond "assume uniform change
-// between two known readings," the same treatment already implicit in
-// drawing straight line segments between the temperature points.
-function interpolateHourly(hourlyTime, hourlyValues, time) {
-  const t = time.getTime();
-  const first = new Date(hourlyTime[0]).getTime();
-  if (t <= first) return hourlyValues[0];
-
-  for (let i = 0; i < hourlyTime.length - 1; i++) {
-    const t0 = new Date(hourlyTime[i]).getTime();
-    const t1 = new Date(hourlyTime[i + 1]).getTime();
-    if (t >= t0 && t <= t1) {
-      const frac = (t - t0) / (t1 - t0);
-      return hourlyValues[i] + frac * (hourlyValues[i + 1] - hourlyValues[i]);
-    }
-  }
-  return hourlyValues[hourlyValues.length - 1];
-}
-
-function attachChartHover(wrap, points, hourlyTime, hourlyPrecip, rawHourlyTime, hourlyCodes) {
+function attachChartHover(wrap, points, hourlyTime, hourlyCodes) {
   const svg = wrap.querySelector(".chart-svg");
   const guide = svg.querySelector(".hover-guide");
   const hoverDot = svg.querySelector(".hover-dot");
@@ -363,8 +323,7 @@ function attachChartHover(wrap, points, hourlyTime, hourlyPrecip, rawHourlyTime,
     const svgX = (evt.clientX - rect.left) * scale;
     const p = nearestPoint(svgX);
     const t = new Date(p.time);
-    const precip = Math.round(interpolateHourly(hourlyTime, hourlyPrecip, t));
-    const code = weathercodeAt(rawHourlyTime, hourlyCodes, t);
+    const code = weathercodeAt(hourlyTime, hourlyCodes, t);
     const [desc, icon] = describeCode(code);
 
     guide.setAttribute("x1", p.x);
@@ -375,7 +334,7 @@ function attachChartHover(wrap, points, hourlyTime, hourlyPrecip, rawHourlyTime,
     hoverDot.setAttribute("cy", p.yTemp);
     hoverDot.classList.add("visible");
 
-    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong> at ${formatHour(p.time)}<br>${precip}% chance, ${p.mm.toFixed(1)}mm &middot; ${icon} ${desc.toLowerCase()}`;
+    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong> at ${formatHour(p.time)}<br>${p.mm.toFixed(1)}mm &middot; ${icon} ${desc.toLowerCase()}`;
     tooltip.classList.add("visible");
 
     const screenX = rect.left + p.x / scale;
@@ -430,7 +389,7 @@ async function loadForecast() {
   }
 }
 
-const WEATHER_SYSTEM_PROMPT = `Weather assistant for Edinburgh. Use only the data below, don't invent numbers. Temperature and rain amount (mm) are readings every 15 minutes; rain probability and conditions are hourly (no wind, no other days — say so if asked). Probability and amount can genuinely disagree (e.g. high probability of a trace amount) — that's a real forecast characteristic, not an error, so don't treat it as contradictory. Keep answers to 1-2 sentences.`;
+const WEATHER_SYSTEM_PROMPT = `Weather assistant for Edinburgh. Use only the data below, don't invent numbers. Temperature and rain amount (mm) are readings every 15 minutes; conditions are hourly. No rain-probability figure is provided (deliberately — the available one wasn't locally reliable), no wind, no other days — say so if asked. Keep answers to 1-2 sentences.`;
 
 function withTimeout(promise, ms) {
   return Promise.race([
@@ -455,10 +414,6 @@ function buildWeatherContext(data) {
     .join(",");
 
   const precipIdxs = remainingTodayIndices(data.hourly.time, now);
-  const precipSeries = precipIdxs
-    .map((i) => `${formatHour(data.hourly.time[i])}=${data.hourly.precipitation_probability[i]}`)
-    .join(",");
-
   const conditionSeries = precipIdxs
     .map((i) => `${formatHour(data.hourly.time[i])}=${conditionLabel(data.hourly.weathercode[i])}`)
     .join(",");
@@ -467,7 +422,6 @@ function buildWeatherContext(data) {
     `Current: ${data.current.temperature_2m.toFixed(1)}C, ${desc.toLowerCase()}, wind ${Math.round(data.current.wind_speed_10m)}km/h.`,
     `Temp forecast today (15-min, HH:MM=C): ${tempSeries}`,
     `Rain amount today (15-min mm, HH:MM=mm): ${mmSeries}`,
-    `Rain probability today (hourly %, HH:MM=%): ${precipSeries}`,
     `Conditions today (hourly, HH:MM=type): ${conditionSeries}`,
   ].join(" ");
 }
