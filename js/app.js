@@ -102,10 +102,27 @@ function renderCurrent(data) {
 
 const CHART = {
   width: 760,
-  padX: 28,
-  plotHeight: 190,
-  labelHeight: 44,
+  padLeft: 34, // room for the temperature axis (ticks + "16°" labels)
+  padRight: 38, // room for the precip-probability axis (ticks + "100%" labels)
+  iconRowHeight: 22, // fixed-height strip at the top for condition icons
+  plotHeight: 170, // main temp line + precip wash area
+  axisLabelHeight: 24, // bottom strip for hour labels
 };
+
+// "Nice" round-number ticks (steps of 1/2/5/10) rather than ticks derived
+// straight from the data's own min/max -- an axis should read in numbers a
+// person would actually think in, not whatever the data happened to span.
+function niceTemperatureTicks(min, max) {
+  const range = max - min || 1;
+  const rawStep = range / 4;
+  const step = [1, 2, 5, 10].find((s) => s >= rawStep) || 10;
+  const start = Math.ceil(min / step) * step;
+  const ticks = [];
+  for (let t = start; t <= max + 1e-9; t += step) ticks.push(Math.round(t));
+  return ticks;
+}
+
+const PRECIP_AXIS_TICKS = [0, 25, 50, 75, 100];
 
 function remainingTodayIndices(times, now) {
   const midnight = new Date(now);
@@ -140,16 +157,17 @@ function renderTodayChart(data) {
   const min = rawMin === rawMax ? rawMin - 1 : rawMin;
   const max = rawMin === rawMax ? rawMax + 1 : rawMax;
 
-  const { width, padX, plotHeight, labelHeight } = CHART;
-  const plotWidth = width - padX * 2;
-  const height = plotHeight + labelHeight;
+  const { width, padLeft, padRight, iconRowHeight, plotHeight, axisLabelHeight } = CHART;
+  const plotWidth = width - padLeft - padRight;
+  const plotTop = iconRowHeight;
+  const height = iconRowHeight + plotHeight + axisLabelHeight;
 
   // Temperature (15-min) and precipitation (hourly) are different native
   // resolutions, so they're placed on one shared axis by actual elapsed
   // time rather than by array index -- that's what keeps a 14:15 point on
   // the line lining up under the right third of the 14:00-15:00 bar.
-  const xForTime = (t) => padX + ((t - now) / spanMs) * plotWidth;
-  const yTemp = (t) => plotHeight - ((t - min) / (max - min)) * plotHeight;
+  const xForTime = (t) => padLeft + ((t - now) / spanMs) * plotWidth;
+  const yTemp = (t) => plotTop + plotHeight - ((t - min) / (max - min)) * plotHeight;
 
   // precipitation (mm) at 15-min resolution also describes the *preceding*
   // interval (confirmed against the docs, same convention as the hourly
@@ -217,34 +235,54 @@ function renderTodayChart(data) {
       const family = precipFamily(code);
       const opacity = opacityForMm(p.mm);
       const barHeight = (prob / 100) * plotHeight;
-      const y = plotHeight - barHeight;
+      const y = plotTop + plotHeight - barHeight;
       return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" fill-opacity="${opacity.toFixed(2)}" class="precip-bar precip-${family}"><title>${formatHour(p.time)} — ${Math.round(prob)}% chance, ${p.mm.toFixed(1)}mm, ${describeCode(code)[0].toLowerCase()} (smoothed)</title></rect>`;
     })
     .join("");
 
-  // Axis + value labels stay anchored to the coarser hourly marks --
-  // labelling every 15-min point would be unreadable clutter.
-  const labelStep = Math.max(1, Math.ceil(precipPoints.length / 8));
-  const labeled = precipPoints.filter((_, i) => i % labelStep === 0 || i === precipPoints.length - 1);
-
-  const hourLabels = labeled
-    .map((p) => `<text x="${p.x.toFixed(1)}" y="${height - 6}" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
+  // Hour labels: every hour, along the bottom -- this is the dedicated
+  // axis strip now that icons have moved elsewhere, so there's room.
+  const hourLabels = precipPoints
+    .map((p) => `<text x="${p.x.toFixed(1)}" y="${(plotTop + plotHeight + 18).toFixed(1)}" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
     .join("");
 
-  const conditionIcons = labeled
+  // Condition icons: every 15-min point, in a fixed-height strip at the
+  // top rather than riding the line -- a fixed y avoids the clipping a
+  // line-following position would hit near peaks (same issue the old
+  // temp-value labels had), and keeps this row clear of the now-denser
+  // hourly axis labels below. weathercode is hourly, so the icon repeats
+  // up to 4x within an hour rather than fabricating 15-min detail that
+  // doesn't exist -- that repetition is honest, not a bug.
+  const conditionIcons = points
     .map((p) => {
-      const hIdx = data.hourly.time.indexOf(p.time);
-      const icon = describeCode(data.hourly.weathercode[hIdx])[1];
-      return `<text x="${p.x.toFixed(1)}" y="${(plotHeight + 16).toFixed(1)}" class="chart-icon-label" text-anchor="middle">${icon}</text>`;
+      const code = weathercodeAt(data.hourly.time, data.hourly.weathercode, new Date(p.time));
+      const icon = describeCode(code)[1];
+      return `<text x="${p.x.toFixed(1)}" y="${(iconRowHeight - 6).toFixed(1)}" class="chart-icon-label" text-anchor="middle">${icon}</text>`;
     })
     .join("");
 
-  const tempLabels = labeled
-    .map((p) => {
-      const hIdx = data.hourly.time.indexOf(p.time);
-      const t = data.hourly.temperature_2m[hIdx];
-      const y = Math.max(yTemp(t) - 10, 10);
-      return `<text x="${p.x.toFixed(1)}" y="${y.toFixed(1)}" class="chart-temp-label" text-anchor="middle">${Math.round(t)}&deg;</text>`;
+  // Temperature axis (left): "nice" round-number ticks, not raw data
+  // extremes. Precip axis (right): fixed 0/25/50/75/100% -- that's what
+  // bar *height* encodes; type (colour) and intensity (opacity) aren't
+  // positional, so they don't need an axis.
+  const tempAxis = niceTemperatureTicks(min, max)
+    .map((tv) => {
+      const ty = yTemp(tv);
+      return (
+        `<line x1="${(padLeft - 4).toFixed(1)}" x2="${padLeft}" y1="${ty.toFixed(1)}" y2="${ty.toFixed(1)}" class="axis-tick" />` +
+        `<text x="${(padLeft - 7).toFixed(1)}" y="${(ty + 3).toFixed(1)}" class="axis-tick-label" text-anchor="end">${tv}&deg;</text>`
+      );
+    })
+    .join("");
+
+  const precipAxis = PRECIP_AXIS_TICKS
+    .map((tv) => {
+      const ty = plotTop + plotHeight - (tv / 100) * plotHeight;
+      const xRight = padLeft + plotWidth;
+      return (
+        `<line x1="${xRight}" x2="${(xRight + 4).toFixed(1)}" y1="${ty.toFixed(1)}" y2="${ty.toFixed(1)}" class="axis-tick" />` +
+        `<text x="${(xRight + 7).toFixed(1)}" y="${(ty + 3).toFixed(1)}" class="axis-tick-label" text-anchor="start">${tv}%</text>`
+      );
     })
     .join("");
 
@@ -252,12 +290,13 @@ function renderTodayChart(data) {
     <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature and rain chance for the rest of today">
       <g class="precip-band">${bars}</g>
       <polyline points="${linePath}" class="chart-line" fill="none" />
-      ${tempLabels}
       ${conditionIcons}
       ${hourLabels}
-      <line class="hover-guide" x1="0" x2="0" y1="0" y2="${plotHeight}" />
+      ${tempAxis}
+      ${precipAxis}
+      <line class="hover-guide" x1="0" x2="0" y1="${plotTop}" y2="${plotTop + plotHeight}" />
       <circle class="hover-dot" r="5" cx="0" cy="0" />
-      <rect class="chart-hit-area" x="${padX}" y="0" width="${plotWidth}" height="${plotHeight}" fill="transparent" />
+      <rect class="chart-hit-area" x="${padLeft}" y="${plotTop}" width="${plotWidth}" height="${plotHeight}" fill="transparent" />
     </svg>
   `;
 

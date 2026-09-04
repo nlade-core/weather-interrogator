@@ -91,17 +91,19 @@ main {
   stroke-linecap: round;
 }
 
-.chart-temp-label {
-  fill: var(--text);
-  font-size: 11px;
-}
-
 .chart-axis-label {
   fill: var(--muted);
   font-size: 10px;
 }
 
-.chart-icon-label { font-size: 13px; text-anchor: middle; }
+.chart-icon-label { font-size: 12px; text-anchor: middle; }
+
+.axis-tick { stroke: var(--border); stroke-width: 1; }
+
+.axis-tick-label {
+  fill: var(--muted);
+  font-size: 9px;
+}
 
 /* Opacity is set per-bar via the fill-opacity attribute (scaled by mm
    intensity) -- CSS only sets the hue per type, so the two don't compound. */
