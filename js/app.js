@@ -14,8 +14,12 @@ FORECAST_URL.search = new URLSearchParams({
   forecast_days: "2",
   models: "ukmo_uk_deterministic_2km",
   current: "temperature_2m,weathercode,wind_speed_10m,precipitation",
-  hourly: "temperature_2m,weathercode,windspeed_10m",
-  minutely_15: "temperature_2m,precipitation",
+  // wind_gusts_10m is a preceding-hour max (like probability/mm were) --
+  // fetched hourly and shifted the same way. wind_speed_10m and
+  // wind_direction_10m are instant, fetched at native 15-min resolution
+  // via minutely_15 instead, no shift needed.
+  hourly: "temperature_2m,weathercode,wind_gusts_10m",
+  minutely_15: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m",
 });
 
 let latestData = null; // most recent fetch, read by the ask handler when building model context
@@ -98,6 +102,11 @@ function formatHour(isoTime) {
   return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 }
 
+const COMPASS_POINTS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+function compassLabel(deg) {
+  return COMPASS_POINTS[Math.round(deg / 45) % 8];
+}
+
 function renderCurrent(data) {
   const [desc, icon] = describeCode(data.current.weathercode);
   const card = document.getElementById("current-card");
@@ -113,7 +122,7 @@ const CHART = {
   padRight: 38, // room for the precip-probability axis (ticks + "100%" labels)
   iconRowHeight: 22, // fixed-height strip at the top for condition icons
   plotHeight: 170, // main temp line + precip wash area
-  axisLabelHeight: 24, // bottom strip for hour labels
+  axisLabelHeight: 44, // bottom strip: wind arrow+speed row, then hour labels
 };
 
 // "Nice" round-number ticks (steps of 1/2/5/10) rather than ticks derived
@@ -194,6 +203,8 @@ function renderTodayChart(data) {
     temp: data.minutely_15.temperature_2m[idx],
     time: data.minutely_15.time[idx],
     mm: mmAt(idx),
+    windSpeed: data.minutely_15.wind_speed_10m[idx],
+    windDir: data.minutely_15.wind_direction_10m[idx],
   }));
 
   const linePath = points.map((p) => `${p.x.toFixed(1)},${p.yTemp.toFixed(1)}`).join(" ");
@@ -228,10 +239,25 @@ function renderTodayChart(data) {
     })
     .join("");
 
-  // Hour labels: every hour, along the bottom -- this is the dedicated
-  // axis strip now that icons have moved elsewhere, so there's room.
+  // Hour labels: every hour, along the bottom, below the wind row.
   const hourLabels = precipPoints
-    .map((p) => `<text x="${p.x.toFixed(1)}" y="${(plotTop + plotHeight + 18).toFixed(1)}" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
+    .map((p) => `<text x="${p.x.toFixed(1)}" y="${(plotTop + plotHeight + 38).toFixed(1)}" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
+    .join("");
+
+  // Wind row: one arrow + speed per 15-min point, both instant UKV fields
+  // at native resolution (no shift, no repetition-within-hour the way
+  // condition icons need). Arrow points in the direction the wind is
+  // blowing *toward* (direction+180, since wind_direction_10m is
+  // meteorological convention -- the direction it's blowing *from*),
+  // which is the more intuitive "which way is it going" reading.
+  const windRow = points
+    .map((p) => {
+      const rotation = (p.windDir + 180) % 360;
+      return (
+        `<text x="${p.x.toFixed(1)}" y="${(plotTop + plotHeight + 12).toFixed(1)}" class="chart-wind-arrow" text-anchor="middle" transform="rotate(${rotation.toFixed(0)}, ${p.x.toFixed(1)}, ${(plotTop + plotHeight + 9).toFixed(1)})">&uarr;</text>` +
+        `<text x="${p.x.toFixed(1)}" y="${(plotTop + plotHeight + 24).toFixed(1)}" class="chart-wind-speed" text-anchor="middle">${Math.round(p.windSpeed)}</text>`
+      );
+    })
     .join("");
 
   // Condition icons: every 15-min point, in a fixed-height strip at the
@@ -285,6 +311,7 @@ function renderTodayChart(data) {
       <g class="precip-band">${bars}</g>
       <polyline points="${linePath}" class="chart-line" fill="none" />
       ${conditionIcons}
+      ${windRow}
       ${hourLabels}
       ${tempAxis}
       ${precipAxis}
@@ -334,7 +361,7 @@ function attachChartHover(wrap, points, hourlyTime, hourlyCodes) {
     hoverDot.setAttribute("cy", p.yTemp);
     hoverDot.classList.add("visible");
 
-    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong> at ${formatHour(p.time)}<br>${p.mm.toFixed(1)}mm &middot; ${icon} ${desc.toLowerCase()}`;
+    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong> at ${formatHour(p.time)}<br>${p.mm.toFixed(1)}mm &middot; ${icon} ${desc.toLowerCase()}<br>${Math.round(p.windSpeed)}km/h from ${compassLabel(p.windDir)}`;
     tooltip.classList.add("visible");
 
     const screenX = rect.left + p.x / scale;
@@ -389,7 +416,7 @@ async function loadForecast() {
   }
 }
 
-const WEATHER_SYSTEM_PROMPT = `Weather assistant for Edinburgh. Use only the data below, don't invent numbers. Temperature and rain amount (mm) are readings every 15 minutes; conditions are hourly. No rain-probability figure is provided (deliberately — the available one wasn't locally reliable), no wind, no other days — say so if asked. Keep answers to 1-2 sentences.`;
+const WEATHER_SYSTEM_PROMPT = `Weather assistant for Edinburgh. Use only the data below, don't invent numbers. Temperature, rain amount, and wind (speed+direction) are readings every 15 minutes; wind gusts and conditions are hourly. No rain-probability figure is provided (deliberately — the available one wasn't locally reliable), no other days — say so if asked. Keep answers to 1-2 sentences.`;
 
 function withTimeout(promise, ms) {
   return Promise.race([
@@ -413,15 +440,29 @@ function buildWeatherContext(data) {
     .map((i) => `${formatHour(data.minutely_15.time[i])}=${(data.minutely_15.precipitation[i + 1] ?? 0).toFixed(1)}`)
     .join(",");
 
+  const windSeries = tempIdxs
+    .map((i) => `${formatHour(data.minutely_15.time[i])}=${Math.round(data.minutely_15.wind_speed_10m[i])}${compassLabel(data.minutely_15.wind_direction_10m[i])}`)
+    .join(",");
+
   const precipIdxs = remainingTodayIndices(data.hourly.time, now);
   const conditionSeries = precipIdxs
     .map((i) => `${formatHour(data.hourly.time[i])}=${conditionLabel(data.hourly.weathercode[i])}`)
+    .join(",");
+
+  // wind_gusts_10m is a preceding-hour max, same convention precipitation_
+  // probability had -- shifted back one position so the reading lines up
+  // with the hour it's actually in force for, not the hour it's filed
+  // under.
+  const gustSeries = precipIdxs
+    .map((i) => `${formatHour(data.hourly.time[i])}=${Math.round(data.hourly.wind_gusts_10m[i + 1])}`)
     .join(",");
 
   return [
     `Current: ${data.current.temperature_2m.toFixed(1)}C, ${desc.toLowerCase()}, wind ${Math.round(data.current.wind_speed_10m)}km/h.`,
     `Temp forecast today (15-min, HH:MM=C): ${tempSeries}`,
     `Rain amount today (15-min mm, HH:MM=mm): ${mmSeries}`,
+    `Wind today (15-min, HH:MM=km/h+direction): ${windSeries}`,
+    `Wind gusts today (hourly peak km/h, HH:MM=km/h): ${gustSeries}`,
     `Conditions today (hourly, HH:MM=type): ${conditionSeries}`,
   ].join(" ");
 }
