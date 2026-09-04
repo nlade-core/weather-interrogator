@@ -115,10 +115,41 @@ main {
   margin-left: 0.4rem;
 }
 
+.stub-badge.available { background: #1e3a2a; color: #6fd68f; }
+.stub-badge.downloadable { background: #3a331e; color: #e0b45c; }
+.stub-badge.unavailable, .stub-badge.missing { background: #3a1e1e; color: #ff8080; }
+
 .stub-note {
   color: var(--muted);
   font-size: 0.85rem;
   margin-bottom: 0.75rem;
+}
+
+.granularity-picker {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.granularity-picker legend {
+  padding: 0 0.4rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.granularity-picker label {
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
 }
 
 .ask-form {
@@ -147,6 +178,12 @@ main {
   padding: 0.5rem 1rem;
   font-weight: 600;
   cursor: pointer;
+}
+
+.ask-form button:disabled {
+  background: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
 }
 
 .ask-response {

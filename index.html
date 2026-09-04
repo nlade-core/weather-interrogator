@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>weather-interrogator</title>
-<link rel="stylesheet" href="css/style.css?v=2">
+<link rel="stylesheet" href="css/style.css?v=3">
 </head>
 <body>
 
@@ -23,11 +23,18 @@
   </section>
 
   <section class="panel llm-stub">
-    <h2>Ask <span class="stub-badge">placeholder</span></h2>
-    <p class="stub-note">Not wired to a model yet &mdash; reserving the spot for Chrome's on-device (Gemini Nano) prompt API. Submitting below returns a canned response.</p>
+    <h2>Ask <span id="model-status-pill" class="stub-badge">checking&hellip;</span></h2>
+    <p class="stub-note">Runs on-device via Chrome's built-in Gemini Nano &mdash; nothing you type here is sent to a server. Requires desktop Chrome with the Prompt API available.</p>
+
+    <fieldset class="granularity-picker">
+      <legend>Data fed to the model</legend>
+      <label><input type="radio" name="granularity" value="hourly" checked> Hourly</label>
+      <label><input type="radio" name="granularity" value="minutely_15"> 15-minutely</label>
+    </fieldset>
+
     <form id="ask-form" class="ask-form">
       <input id="ask-input" type="text" placeholder="e.g. Is it worth a BBQ this weekend?" autocomplete="off">
-      <button type="submit">Ask</button>
+      <button id="ask-submit" type="submit" disabled>Ask</button>
     </form>
     <div id="ask-response" class="ask-response" hidden></div>
   </section>
@@ -39,9 +46,9 @@
 </main>
 
 <footer class="site-footer">
-  <p>Data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>. No API key, no tracking, no LLM (yet).</p>
+  <p>Data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>. No API key, no tracking. On-device model, no server.</p>
 </footer>
 
-<script src="js/app.js?v=2"></script>
+<script src="js/app.js?v=3"></script>
 </body>
 </html>

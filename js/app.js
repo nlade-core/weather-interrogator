@@ -8,7 +8,10 @@ FORECAST_URL.search = new URLSearchParams({
   forecast_days: "2",
   current: "temperature_2m,weathercode,wind_speed_10m,precipitation",
   hourly: "temperature_2m,precipitation_probability,weathercode,windspeed_10m",
+  minutely_15: "temperature_2m",
 });
+
+let latestData = null; // most recent fetch, read by the ask handler when building model context
 
 // WMO weather codes: https://open-meteo.com/en/docs -> "WMO Weather interpretation codes"
 const WEATHER_CODES = {
@@ -69,13 +72,12 @@ const CHART = {
   labelHeight: 28,
 };
 
-function todaysRemainingIndices(data) {
-  const now = new Date(data.current.time);
+function remainingTodayIndices(times, now) {
   const midnight = new Date(now);
   midnight.setHours(24, 0, 0, 0);
 
   const idxs = [];
-  data.hourly.time.forEach((t, i) => {
+  times.forEach((t, i) => {
     const ts = new Date(t);
     if (ts >= now && ts < midnight) idxs.push(i);
   });
@@ -84,7 +86,7 @@ function todaysRemainingIndices(data) {
 
 function renderTodayChart(data) {
   const wrap = document.getElementById("today-chart");
-  const idxs = todaysRemainingIndices(data);
+  const idxs = remainingTodayIndices(data.hourly.time, new Date(data.current.time));
 
   if (idxs.length < 2) {
     wrap.innerHTML = `<p class="chart-empty">Not much of today left to chart &mdash; check back after midnight.</p>`;
@@ -162,6 +164,7 @@ async function loadForecast() {
     const res = await fetch(FORECAST_URL);
     if (!res.ok) throw new Error(`Open-Meteo responded ${res.status}`);
     const data = await res.json();
+    latestData = data;
 
     renderRaw(data);
     renderCurrent(data);
@@ -174,20 +177,115 @@ async function loadForecast() {
   }
 }
 
-function setupAskStub() {
-  const form = document.getElementById("ask-form");
-  const input = document.getElementById("ask-input");
-  const output = document.getElementById("ask-response");
+const WEATHER_SYSTEM_PROMPT = `You are a concise weather assistant for Edinburgh, Scotland. Answer using only the forecast data provided in the prompt — don't invent numbers that aren't there. Be direct and practical, aimed at someone deciding whether to do something outdoors. A couple of sentences is enough.`;
 
-  form.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const question = input.value.trim();
-    if (!question) return;
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("timed out")), ms)),
+  ]);
+}
 
-    output.hidden = false;
-    output.textContent = `"${question}" — this is where Chrome's on-device model will answer, once it's wired up. No LLM call was made.`;
+function buildWeatherContext(data, granularity) {
+  const now = new Date(data.current.time);
+  const [desc] = describeCode(data.current.weathercode);
+  const block = granularity === "minutely_15" ? data.minutely_15 : data.hourly;
+  const idxs = remainingTodayIndices(block.time, now);
+
+  const lines = idxs.map((i) => `${formatHour(block.time[i])}: ${block.temperature_2m[i].toFixed(1)}°C`);
+
+  return [
+    `Current conditions: ${data.current.temperature_2m.toFixed(1)}°C, ${desc.toLowerCase()}, wind ${Math.round(data.current.wind_speed_10m)} km/h.`,
+    ``,
+    `Temperature forecast for the rest of today (${granularity === "minutely_15" ? "15-minute" : "hourly"} intervals):`,
+    ...lines,
+  ].join("\n");
+}
+
+// --- Model loading -------------------------------------------------------
+// Mirrors the prewarm pattern from chrome-chat: only auto-create a session
+// at startup when the model is already downloaded, never trigger a silent
+// download the visitor didn't ask for. A "downloadable" or "unavailable"
+// state still lets Ask be clicked — creation is attempted lazily then,
+// which is the visitor's own action triggering any download.
+
+let prewarmedSession = null; // Promise<session> | null
+let promptOk = false;
+
+function setStatusPill(className, text) {
+  const pill = document.getElementById("model-status-pill");
+  pill.className = `stub-badge ${className}`;
+  pill.textContent = text;
+}
+
+async function checkModelCapability() {
+  if (!self.LanguageModel) {
+    setStatusPill("missing", "not in this browser");
+    return;
+  }
+
+  try {
+    const availability = await withTimeout(LanguageModel.availability(), 5000);
+    promptOk = availability !== "unavailable";
+    setStatusPill(availability, availability === "downloadable" ? "needs download" : availability);
+
+    if (availability === "available") {
+      prewarmedSession = LanguageModel.create({
+        initialPrompts: [{ role: "system", content: WEATHER_SYSTEM_PROMPT }],
+      });
+    }
+  } catch (err) {
+    setStatusPill("unavailable", `error: ${err.message}`);
+  }
+
+  document.getElementById("ask-submit").disabled = !promptOk;
+}
+
+async function getModelSession() {
+  if (prewarmedSession) {
+    const session = await prewarmedSession;
+    prewarmedSession = null;
+    return session;
+  }
+  return LanguageModel.create({
+    initialPrompts: [{ role: "system", content: WEATHER_SYSTEM_PROMPT }],
   });
 }
 
-setupAskStub();
+function setupAsk() {
+  const form = document.getElementById("ask-form");
+  const input = document.getElementById("ask-input");
+  const output = document.getElementById("ask-response");
+  const submitBtn = document.getElementById("ask-submit");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const question = input.value.trim();
+    if (!question || !latestData) return;
+
+    const granularity = form.elements["granularity"].value;
+
+    output.hidden = false;
+    output.textContent = "Thinking…";
+    submitBtn.disabled = true;
+
+    let session;
+    try {
+      session = await getModelSession();
+      const context = buildWeatherContext(latestData, granularity);
+      const answer = await session.prompt(`${context}\n\nQuestion: ${question}`);
+      output.textContent = answer;
+    } catch (err) {
+      output.textContent = `Model error: ${err.message}`;
+    } finally {
+      if (session) {
+        try { session.destroy(); } catch {}
+      }
+      submitBtn.disabled = !promptOk;
+    }
+  });
+}
+
+setupAsk();
+checkModelCapability();
 loadForecast();

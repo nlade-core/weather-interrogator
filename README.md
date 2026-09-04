@@ -10,17 +10,17 @@ Weather APIs return a wall of hourly arrays. Most questions people actually have
 
 ## MVP (current)
 
-- Fetch Open-Meteo's forecast endpoint for Edinburgh (current conditions + hourly through midnight)
-- Chart temperature and rain chance for the rest of today; raw JSON available collapsed
-- "Ask" box reserves the layout for the LLM step — currently a stub that returns a canned response, no model wired up
+- Fetch Open-Meteo's forecast endpoint for Edinburgh: current conditions, hourly, and 15-minutely temperature through midnight
+- Chart temperature and rain chance for the rest of today (hourly); raw JSON available collapsed
+- "Ask" box is wired to Chrome's built-in Gemini Nano (Prompt API) — on-device, no server. The model is pre-warmed at page load when it's already downloaded, rather than waiting for the first question
+- A granularity toggle lets you manually compare answers built from hourly vs. 15-minutely temperature context for the same question
 - No build step, no dependencies — plain HTML/CSS/JS
 
 ## Roadmap
 
-- [ ] Broaden the fetched fields (feels-like temp, UV index, wind gusts, precipitation in mm) — needed before the LLM step can answer judgment-call questions properly
-- [ ] Wire up Chrome's built-in Gemini Nano in place of the "Ask" stub, starting with single-variable questions ("will it rain today")
-- [ ] Extend to multi-variable judgment calls ("is it worth a BBQ this weekend") — the actual point of adding an LLM at all
-- [ ] Daily summary view (multi-day, not just today) for weekend-scale questions
+- [ ] Compare hourly vs. 15-minutely context quality across a few real questions, decide which becomes the default (or whether it should switch per question type)
+- [ ] Broaden the fetched fields (feels-like temp, UV index, wind gusts, precipitation in mm) into the model context — needed before it can answer judgment-call questions ("is it worth a BBQ") rather than temperature-only ones
+- [ ] Extend the chart itself: wind band, multi-day view for weekend-scale questions, on-line weather icons
 - [ ] Consider a location picker beyond Edinburgh
 
 ## Stack
