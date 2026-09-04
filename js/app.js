@@ -120,9 +120,9 @@ const CHART = {
   width: 760,
   padLeft: 34, // room for the temperature axis (ticks + "16°" labels)
   padRight: 38, // room for the precip-probability axis (ticks + "100%" labels)
-  iconRowHeight: 22, // fixed-height strip at the top for condition icons
+  topStripHeight: 40, // fixed-height strip at the top: condition icons, then wind arrow+speed stacked below
   plotHeight: 170, // main temp line + precip wash area
-  axisLabelHeight: 44, // bottom strip: wind arrow+speed row, then hour labels
+  axisLabelHeight: 24, // bottom strip for hour labels only
 };
 
 // "Nice" round-number ticks (steps of 1/2/5/10) rather than ticks derived
@@ -178,10 +178,10 @@ function renderTodayChart(data) {
   let max = Math.ceil(rawMax / 5) * 5;
   if (max <= min) max = min + 5;
 
-  const { width, padLeft, padRight, iconRowHeight, plotHeight, axisLabelHeight } = CHART;
+  const { width, padLeft, padRight, topStripHeight, plotHeight, axisLabelHeight } = CHART;
   const plotWidth = width - padLeft - padRight;
-  const plotTop = iconRowHeight;
-  const height = iconRowHeight + plotHeight + axisLabelHeight;
+  const plotTop = topStripHeight;
+  const height = topStripHeight + plotHeight + axisLabelHeight;
 
   // Temperature (15-min) and precipitation (hourly) are different native
   // resolutions, so they're placed on one shared axis by actual elapsed
@@ -239,45 +239,38 @@ function renderTodayChart(data) {
     })
     .join("");
 
-  // Hour labels: every hour, along the bottom, below the wind row.
+  // Hour labels: every hour, along the bottom -- just the time axis now,
+  // wind moved up to share the top strip with the condition icons.
   const hourLabels = precipPoints
-    .map((p) => `<text x="${p.x.toFixed(1)}" y="${(plotTop + plotHeight + 38).toFixed(1)}" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
+    .map((p) => `<text x="${p.x.toFixed(1)}" y="${(plotTop + plotHeight + 18).toFixed(1)}" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
     .join("");
 
-  // Wind row: one arrow + speed per 15-min point, both instant UKV fields
-  // at native resolution (no shift, no repetition-within-hour the way
-  // condition icons need). Arrow points in the direction the wind is
-  // blowing *toward* (direction+180, since wind_direction_10m is
-  // meteorological convention -- the direction it's blowing *from*),
-  // which is the more intuitive "which way is it going" reading.
-  const windRow = points
-    .map((p) => {
-      const rotation = (p.windDir + 180) % 360;
-      return (
-        `<text x="${p.x.toFixed(1)}" y="${(plotTop + plotHeight + 12).toFixed(1)}" class="chart-wind-arrow" text-anchor="middle" transform="rotate(${rotation.toFixed(0)}, ${p.x.toFixed(1)}, ${(plotTop + plotHeight + 9).toFixed(1)})">&uarr;</text>` +
-        `<text x="${p.x.toFixed(1)}" y="${(plotTop + plotHeight + 24).toFixed(1)}" class="chart-wind-speed" text-anchor="middle">${Math.round(p.windSpeed)}</text>`
-      );
-    })
-    .join("");
-
-  // Condition icons: every 15-min point, in a fixed-height strip at the
-  // top rather than riding the line -- a fixed y avoids the clipping a
-  // line-following position would hit near peaks (same issue the old
-  // temp-value labels had), and keeps this row clear of the now-denser
-  // hourly axis labels below. weathercode is hourly, so the icon repeats
-  // up to 4x within an hour rather than fabricating 15-min detail that
-  // doesn't exist -- that repetition is honest, not a bug.
-  //
-  // Icons ride the temperature line itself (Yr-style) rather than sitting
-  // in a fixed row -- a little above each point. Clamped to a minimum y
-  // so a point near the top of the 0-25° range can't push its icon off
-  // the top edge, the same clipping issue the old inline temp labels hit.
+  // Top strip, stacked: condition icons above, wind arrow+speed below --
+  // both fixed-position (not line-following) so they stack predictably
+  // rather than the wind row having to chase a moving icon row. Condition
+  // icons repeat up to 4x within an hour (weathercode is hourly); wind is
+  // genuine 15-min data throughout, no repetition.
   const conditionIcons = points
     .map((p) => {
       const code = weathercodeAt(data.hourly.time, data.hourly.weathercode, new Date(p.time));
       const icon = describeCode(code)[1];
-      const y = Math.max(p.yTemp - 12, 10);
-      return `<text x="${p.x.toFixed(1)}" y="${y.toFixed(1)}" class="chart-icon-label" text-anchor="middle">${icon}</text>`;
+      return `<text x="${p.x.toFixed(1)}" y="14" class="chart-icon-label" text-anchor="middle">${icon}</text>`;
+    })
+    .join("");
+
+  // Wind row: one arrow + speed per 15-min point, both instant UKV fields
+  // at native resolution (no shift needed, unlike gusts). Arrow points in
+  // the direction the wind is blowing *toward* (direction+180, since
+  // wind_direction_10m is meteorological convention -- the direction
+  // it's blowing *from*), which is the more intuitive "which way is it
+  // going" reading.
+  const windRow = points
+    .map((p) => {
+      const rotation = (p.windDir + 180) % 360;
+      return (
+        `<text x="${p.x.toFixed(1)}" y="27" class="chart-wind-arrow" text-anchor="middle" transform="rotate(${rotation.toFixed(0)}, ${p.x.toFixed(1)}, 24)">&uarr;</text>` +
+        `<text x="${p.x.toFixed(1)}" y="37" class="chart-wind-speed" text-anchor="middle">${Math.round(p.windSpeed)}</text>`
+      );
     })
     .join("");
 
