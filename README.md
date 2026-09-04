@@ -24,7 +24,7 @@ Weather APIs return a wall of hourly arrays. Most questions people actually have
 
 ## Roadmap
 
-- [ ] Confirm the on-device chat actually works end-to-end in real desktop Chrome (last manual test found it not responding; logging added since should surface why)
+- [x] Confirmed working end-to-end in real desktop Chrome — user tested manually after the chat rework (two-turn reasoning, chat-bubble log, precise download/preparing status)
 - [ ] Revisit hourly vs. 15-minutely context comparison — dropped for now in favour of a single persistent 15-minutely session, worth re-adding once the core chat flow is confirmed solid
 - [x] Root cause of the ~90-100% probability / ~0.0mm pattern, now *confirmed* rather than inferred: `precipitation_probability` comes from a **~27km generic global ensemble** (stated outright in Open-Meteo's own docs), while temperature/amount/weathercode come from the UK-specific **2km UKV** deterministic model. Different resolution, different source — not a bug, not the model contradicting itself. Checked MOGREPS-UK's actual 3 members directly for a live case: all three agreed on ~0mm while `best_match` showed 99% — strong evidence the coarse global ensemble is the mismatched one, not the local data
 - [x] Decided against keeping the mismatched probability field around even as a labelled secondary — dropped it entirely. Pinned the fetch to `models=ukmo_uk_deterministic_2km` explicitly (confirmed identical values to best_match for every field that matters; only difference is the gap is now null instead of silently backfilled), reworked the wash to run on predicted mm directly, fixed the one spot in the system prompt that referenced probability
