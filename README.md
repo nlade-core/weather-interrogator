@@ -2,7 +2,7 @@
 
 Short-term weather forecast for Edinburgh, pulled live from [Open-Meteo](https://open-meteo.com/) (no API key needed — safe for a static site). Raw JSON and a navigated view sit side by side, so the point of the tool is visible: same data, easier to use.
 
-Live: _(added once GH Pages is enabled)_
+Live: https://nlade-core.github.io/weather-interrogator/
 
 ## Why
 
