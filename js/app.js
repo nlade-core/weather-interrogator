@@ -58,6 +58,22 @@ function precipFamily(code) {
   return "rain"; // default/majority case -- drizzle, rain, showers, and the no-precip codes all read as the existing blue
 }
 
+const DRIZZLE_CODES = new Set([51, 53, 55, 56, 57]);
+const RAIN_CODES = new Set([61, 63, 65, 66, 67, 80, 81, 82]);
+
+// Short single-word label for the model context -- separate from
+// describeCode's fuller text, kept compact since this repeats once per
+// hour in the prompt. Severity ("slight"/"heavy") is dropped here since
+// the mm series already carries that; this is type only.
+function conditionLabel(code) {
+  if (STORM_CODES.has(code)) return "storm";
+  if (SNOW_CODES.has(code)) return "snow";
+  if (code === 45 || code === 48) return "fog";
+  if (DRIZZLE_CODES.has(code)) return "drizzle";
+  if (RAIN_CODES.has(code)) return "rain";
+  return code === 0 ? "clear" : "cloudy";
+}
+
 // weathercode is an instant reading at its own timestamp (confirmed against
 // the docs -- unlike precipitation_probability, it needs no hour shift), so
 // this is a plain "most recent known reading" lookup, not interpolation.
@@ -362,7 +378,7 @@ async function loadForecast() {
   }
 }
 
-const WEATHER_SYSTEM_PROMPT = `Weather assistant for Edinburgh. Use only the data below, don't invent numbers. Temperature is a reading every 15 minutes; rain probability is one reading per hour (no rain amount/severity data yet, no wind, no other days — say so if asked). Keep answers to 1-2 sentences.`;
+const WEATHER_SYSTEM_PROMPT = `Weather assistant for Edinburgh. Use only the data below, don't invent numbers. Temperature and rain amount (mm) are readings every 15 minutes; rain probability and conditions are hourly (no wind, no other days — say so if asked). Probability and amount can genuinely disagree (e.g. high probability of a trace amount) — that's a real forecast characteristic, not an error, so don't treat it as contradictory. Keep answers to 1-2 sentences.`;
 
 function withTimeout(promise, ms) {
   return Promise.race([
@@ -380,15 +396,27 @@ function buildWeatherContext(data) {
     .map((i) => `${formatHour(data.minutely_15.time[i])}=${data.minutely_15.temperature_2m[i].toFixed(1)}`)
     .join(",");
 
+  // Same preceding-interval shift as the chart: the reading at index i+1
+  // is the one actually in force during the slot at index i.
+  const mmSeries = tempIdxs
+    .map((i) => `${formatHour(data.minutely_15.time[i])}=${(data.minutely_15.precipitation[i + 1] ?? 0).toFixed(1)}`)
+    .join(",");
+
   const precipIdxs = remainingTodayIndices(data.hourly.time, now);
   const precipSeries = precipIdxs
     .map((i) => `${formatHour(data.hourly.time[i])}=${data.hourly.precipitation_probability[i]}`)
     .join(",");
 
+  const conditionSeries = precipIdxs
+    .map((i) => `${formatHour(data.hourly.time[i])}=${conditionLabel(data.hourly.weathercode[i])}`)
+    .join(",");
+
   return [
     `Current: ${data.current.temperature_2m.toFixed(1)}C, ${desc.toLowerCase()}, wind ${Math.round(data.current.wind_speed_10m)}km/h.`,
     `Temp forecast today (15-min, HH:MM=C): ${tempSeries}`,
+    `Rain amount today (15-min mm, HH:MM=mm): ${mmSeries}`,
     `Rain probability today (hourly %, HH:MM=%): ${precipSeries}`,
+    `Conditions today (hourly, HH:MM=type): ${conditionSeries}`,
   ].join(" ");
 }
 
