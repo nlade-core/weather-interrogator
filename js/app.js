@@ -126,19 +126,27 @@ function renderTodayChart(data) {
 
   const linePath = points.map((p) => `${p.x.toFixed(1)},${p.yTemp.toFixed(1)}`).join(" ");
 
+  // Hourly probability values, kept as-is for the hover tooltip lookup --
+  // this is the real native resolution, no finer probability data exists.
   const precipPoints = precipIdxs.map((idx) => ({
     x: xForTime(new Date(data.hourly.time[idx])),
     precip: data.hourly.precipitation_probability[idx],
     time: data.hourly.time[idx],
   }));
 
-  const hourMs = 60 * 60 * 1000;
-  const barWidth = Math.max((hourMs / spanMs) * plotWidth * 0.7, 4);
-  const bars = precipPoints
+  // Apple-style bar strip: one bar per 15-min slot (matching the temp
+  // line's grid) rather than one wide bar per hour. Each bar holds its
+  // containing hour's probability -- visually finer, but not pretending
+  // to precision the data doesn't have, since the value only changes
+  // once an hour.
+  const quarterMs = 15 * 60 * 1000;
+  const barWidth = Math.max((quarterMs / spanMs) * plotWidth * 0.82, 3);
+  const bars = points
     .map((p) => {
-      const barHeight = (p.precip / 100) * precipBandHeight;
+      const prob = hourlyValueAt(data.hourly.time, data.hourly.precipitation_probability, new Date(p.time));
+      const barHeight = (prob / 100) * precipBandHeight;
       const y = precipTop + (precipBandHeight - barHeight);
-      return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" class="precip-bar"><title>${formatHour(p.time)} — ${p.precip}% rain chance</title></rect>`;
+      return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" class="precip-bar"><title>${formatHour(p.time)} — ${prob}% rain chance</title></rect>`;
     })
     .join("");
 
@@ -172,6 +180,15 @@ function renderTodayChart(data) {
   `;
 
   attachChartHover(wrap, points, precipPoints);
+}
+
+function hourlyValueAt(hourlyTime, hourlyValues, time) {
+  let val = hourlyValues[0];
+  for (let i = 0; i < hourlyTime.length; i++) {
+    if (new Date(hourlyTime[i]) <= time) val = hourlyValues[i];
+    else break;
+  }
+  return val;
 }
 
 function precipForTime(precipPoints, time) {
@@ -273,7 +290,7 @@ async function loadForecast() {
   }
 }
 
-const WEATHER_SYSTEM_PROMPT = `Weather assistant for Edinburgh. Use only the temperature data below, don't invent numbers. If asked about something it doesn't cover (rain, wind, other days), say so. Keep answers to 1-2 sentences.`;
+const WEATHER_SYSTEM_PROMPT = `Weather assistant for Edinburgh. Use only the data below, don't invent numbers. Temperature is per 15 minutes; rain probability is per hour and applies to that whole hour (no rain amount/severity data yet, no wind, no other days — say so if asked). Keep answers to 1-2 sentences.`;
 
 function withTimeout(promise, ms) {
   return Promise.race([
@@ -285,13 +302,22 @@ function withTimeout(promise, ms) {
 function buildWeatherContext(data) {
   const now = new Date(data.current.time);
   const [desc] = describeCode(data.current.weathercode);
-  const idxs = remainingTodayIndices(data.minutely_15.time, now);
 
-  const series = idxs
+  const tempIdxs = remainingTodayIndices(data.minutely_15.time, now);
+  const tempSeries = tempIdxs
     .map((i) => `${formatHour(data.minutely_15.time[i])}=${data.minutely_15.temperature_2m[i].toFixed(1)}`)
     .join(",");
 
-  return `Current: ${data.current.temperature_2m.toFixed(1)}C, ${desc.toLowerCase()}, wind ${Math.round(data.current.wind_speed_10m)}km/h. Temp forecast today (15-min, HH:MM=C): ${series}`;
+  const precipIdxs = remainingTodayIndices(data.hourly.time, now);
+  const precipSeries = precipIdxs
+    .map((i) => `${formatHour(data.hourly.time[i])}=${data.hourly.precipitation_probability[i]}`)
+    .join(",");
+
+  return [
+    `Current: ${data.current.temperature_2m.toFixed(1)}C, ${desc.toLowerCase()}, wind ${Math.round(data.current.wind_speed_10m)}km/h.`,
+    `Temp forecast today (15-min, HH:MM=C): ${tempSeries}`,
+    `Rain probability today (hourly %, HH:MM=%): ${precipSeries}`,
+  ].join(" ");
 }
 
 // --- Model loading -------------------------------------------------------
