@@ -49,6 +49,27 @@ function describeCode(code) {
   return WEATHER_CODES[code] ?? [`Unknown (code ${code})`, "❓"];
 }
 
+const SNOW_CODES = new Set([71, 73, 75, 77, 85, 86]);
+const STORM_CODES = new Set([95, 96, 99]);
+
+function precipFamily(code) {
+  if (STORM_CODES.has(code)) return "storm";
+  if (SNOW_CODES.has(code)) return "snow";
+  return "rain"; // default/majority case -- drizzle, rain, showers, and the no-precip codes all read as the existing blue
+}
+
+// weathercode is an instant reading at its own timestamp (confirmed against
+// the docs -- unlike precipitation_probability, it needs no hour shift), so
+// this is a plain "most recent known reading" lookup, not interpolation.
+function weathercodeAt(hourlyTime, hourlyCodes, time) {
+  let code = hourlyCodes[0];
+  for (let i = 0; i < hourlyTime.length; i++) {
+    if (new Date(hourlyTime[i]) <= time) code = hourlyCodes[i];
+    else break;
+  }
+  return code;
+}
+
 function formatHour(isoTime) {
   const d = new Date(isoTime);
   return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
@@ -67,7 +88,7 @@ const CHART = {
   width: 760,
   padX: 28,
   plotHeight: 190,
-  labelHeight: 28,
+  labelHeight: 44,
 };
 
 function remainingTodayIndices(times, now) {
@@ -151,10 +172,13 @@ function renderTodayChart(data) {
   const barWidth = Math.max((quarterMs / spanMs) * plotWidth * 0.82, 3);
   const bars = points
     .map((p) => {
-      const prob = interpolateHourly(shiftedTime, shiftedPrecip, new Date(p.time));
+      const t = new Date(p.time);
+      const prob = interpolateHourly(shiftedTime, shiftedPrecip, t);
+      const code = weathercodeAt(data.hourly.time, data.hourly.weathercode, t);
+      const family = precipFamily(code);
       const barHeight = (prob / 100) * plotHeight;
       const y = plotHeight - barHeight;
-      return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" class="precip-bar"><title>${formatHour(p.time)} — ${Math.round(prob)}% rain chance (smoothed)</title></rect>`;
+      return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" class="precip-bar precip-${family}"><title>${formatHour(p.time)} — ${Math.round(prob)}% chance, ${describeCode(code)[0].toLowerCase()} (smoothed)</title></rect>`;
     })
     .join("");
 
@@ -165,6 +189,14 @@ function renderTodayChart(data) {
 
   const hourLabels = labeled
     .map((p) => `<text x="${p.x.toFixed(1)}" y="${height - 6}" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
+    .join("");
+
+  const conditionIcons = labeled
+    .map((p) => {
+      const hIdx = data.hourly.time.indexOf(p.time);
+      const icon = describeCode(data.hourly.weathercode[hIdx])[1];
+      return `<text x="${p.x.toFixed(1)}" y="${(plotHeight + 16).toFixed(1)}" class="chart-icon-label" text-anchor="middle">${icon}</text>`;
+    })
     .join("");
 
   const tempLabels = labeled
@@ -181,6 +213,7 @@ function renderTodayChart(data) {
       <g class="precip-band">${bars}</g>
       <polyline points="${linePath}" class="chart-line" fill="none" />
       ${tempLabels}
+      ${conditionIcons}
       ${hourLabels}
       <line class="hover-guide" x1="0" x2="0" y1="0" y2="${plotHeight}" />
       <circle class="hover-dot" r="5" cx="0" cy="0" />
@@ -188,7 +221,7 @@ function renderTodayChart(data) {
     </svg>
   `;
 
-  attachChartHover(wrap, points, shiftedTime, shiftedPrecip);
+  attachChartHover(wrap, points, shiftedTime, shiftedPrecip, data.hourly.time, data.hourly.weathercode);
 }
 
 // Hourly readings are point samples, not step functions -- linearly
@@ -212,7 +245,7 @@ function interpolateHourly(hourlyTime, hourlyValues, time) {
   return hourlyValues[hourlyValues.length - 1];
 }
 
-function attachChartHover(wrap, points, hourlyTime, hourlyPrecip) {
+function attachChartHover(wrap, points, hourlyTime, hourlyPrecip, rawHourlyTime, hourlyCodes) {
   const svg = wrap.querySelector(".chart-svg");
   const guide = svg.querySelector(".hover-guide");
   const hoverDot = svg.querySelector(".hover-dot");
@@ -237,7 +270,10 @@ function attachChartHover(wrap, points, hourlyTime, hourlyPrecip) {
     const scale = CHART.width / rect.width;
     const svgX = (evt.clientX - rect.left) * scale;
     const p = nearestPoint(svgX);
-    const precip = Math.round(interpolateHourly(hourlyTime, hourlyPrecip, new Date(p.time)));
+    const t = new Date(p.time);
+    const precip = Math.round(interpolateHourly(hourlyTime, hourlyPrecip, t));
+    const code = weathercodeAt(rawHourlyTime, hourlyCodes, t);
+    const [desc, icon] = describeCode(code);
 
     guide.setAttribute("x1", p.x);
     guide.setAttribute("x2", p.x);
@@ -247,7 +283,7 @@ function attachChartHover(wrap, points, hourlyTime, hourlyPrecip) {
     hoverDot.setAttribute("cy", p.yTemp);
     hoverDot.classList.add("visible");
 
-    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong> at ${formatHour(p.time)}<br>${precip}% rain chance (smoothed)`;
+    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong> at ${formatHour(p.time)}<br>${precip}% chance &middot; ${icon} ${desc.toLowerCase()}`;
     tooltip.classList.add("visible");
 
     const screenX = rect.left + p.x / scale;

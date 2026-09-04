@@ -12,6 +12,8 @@ img, svg { display: block; max-width: 100%; }
   --accent: #5fb4ff;
   --temp: #ffb454;
   --precip: #0a84ff;
+  --precip-snow: #cfe9f5;
+  --precip-storm: #a855f7;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -99,7 +101,11 @@ main {
   font-size: 10px;
 }
 
+.chart-icon-label { font-size: 13px; text-anchor: middle; }
+
 .precip-bar { fill: var(--precip); opacity: 0.28; }
+.precip-bar.precip-snow { fill: var(--precip-snow); opacity: 0.4; }
+.precip-bar.precip-storm { fill: var(--precip-storm); opacity: 0.4; }
 
 .chart-empty { color: var(--muted); font-size: 0.9rem; }
 
