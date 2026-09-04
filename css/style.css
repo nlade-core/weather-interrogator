@@ -99,7 +99,7 @@ main {
   font-size: 10px;
 }
 
-.precip-bar { fill: var(--precip); }
+.precip-bar { fill: var(--precip); opacity: 0.28; }
 
 .chart-empty { color: var(--muted); font-size: 0.9rem; }
 
@@ -181,35 +181,63 @@ main {
 
 .log-entry {
   padding: 0.6rem 0.75rem;
-  border-radius: 6px;
+  border-radius: 10px;
   font-size: 0.9rem;
   line-height: 1.4;
+  max-width: 82%;
 }
 
 .log-entry.log-status {
+  align-self: center;
   color: var(--muted);
   font-size: 0.8rem;
   font-style: italic;
   padding: 0.2rem 0.1rem;
+  max-width: 100%;
 }
 
 .log-entry.log-question {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text);
+  align-self: flex-end;
+  background: var(--accent);
+  color: #0f1115;
   font-weight: 600;
+  border-bottom-right-radius: 2px;
+}
+
+.log-entry.log-reasoning {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.log-entry.log-reasoning::before {
+  content: "reasoning";
+  display: block;
+  font-style: normal;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+  margin-bottom: 0.2rem;
 }
 
 .log-entry.log-answer {
-  background: var(--bg);
-  border: 1px dashed var(--accent);
+  align-self: flex-start;
+  background: var(--panel);
+  border: 1px solid var(--border);
   color: var(--text);
+  border-bottom-left-radius: 2px;
 }
 
 .log-entry.log-error {
+  align-self: center;
   background: #2a1414;
   border: 1px solid #5c2626;
   color: #ff8080;
+  max-width: 100%;
 }
 
 .ask-form {

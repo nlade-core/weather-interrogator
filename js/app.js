@@ -66,9 +66,7 @@ function renderCurrent(data) {
 const CHART = {
   width: 760,
   padX: 28,
-  tempBandHeight: 150,
-  bandGap: 8,
-  precipBandHeight: 64,
+  plotHeight: 190,
   labelHeight: 28,
 };
 
@@ -105,17 +103,16 @@ function renderTodayChart(data) {
   const min = rawMin === rawMax ? rawMin - 1 : rawMin;
   const max = rawMin === rawMax ? rawMax + 1 : rawMax;
 
-  const { width, padX, tempBandHeight, bandGap, precipBandHeight, labelHeight } = CHART;
+  const { width, padX, plotHeight, labelHeight } = CHART;
   const plotWidth = width - padX * 2;
-  const height = tempBandHeight + bandGap + precipBandHeight + labelHeight;
-  const precipTop = tempBandHeight + bandGap;
+  const height = plotHeight + labelHeight;
 
   // Temperature (15-min) and precipitation (hourly) are different native
   // resolutions, so they're placed on one shared axis by actual elapsed
   // time rather than by array index -- that's what keeps a 14:15 point on
   // the line lining up under the right third of the 14:00-15:00 bar.
   const xForTime = (t) => padX + ((t - now) / spanMs) * plotWidth;
-  const yTemp = (t) => tempBandHeight - ((t - min) / (max - min)) * tempBandHeight;
+  const yTemp = (t) => plotHeight - ((t - min) / (max - min)) * plotHeight;
 
   const points = tempIdxs.map((idx) => ({
     x: xForTime(new Date(data.minutely_15.time[idx])),
@@ -134,18 +131,19 @@ function renderTodayChart(data) {
     time: data.hourly.time[idx],
   }));
 
-  // Apple-style bar strip: one bar per 15-min slot (matching the temp
-  // line's grid) rather than one wide bar per hour. Each bar holds its
-  // containing hour's probability -- visually finer, but not pretending
-  // to precision the data doesn't have, since the value only changes
-  // once an hour.
+  // Apple-style: precip is a faded wash behind the temperature line rather
+  // than a separate band -- bar height is probability against the full
+  // plot height (100% reaches the top), low-opacity so the line stays
+  // readable through it. One bar per 15-min slot (matching the temp
+  // line's grid), each holding its containing hour's probability -- still
+  // not pretending to precision the data doesn't have.
   const quarterMs = 15 * 60 * 1000;
   const barWidth = Math.max((quarterMs / spanMs) * plotWidth * 0.82, 3);
   const bars = points
     .map((p) => {
       const prob = hourlyValueAt(data.hourly.time, data.hourly.precipitation_probability, new Date(p.time));
-      const barHeight = (prob / 100) * precipBandHeight;
-      const y = precipTop + (precipBandHeight - barHeight);
+      const barHeight = (prob / 100) * plotHeight;
+      const y = plotHeight - barHeight;
       return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" class="precip-bar"><title>${formatHour(p.time)} — ${prob}% rain chance</title></rect>`;
     })
     .join("");
@@ -163,7 +161,8 @@ function renderTodayChart(data) {
     .map((p) => {
       const hIdx = data.hourly.time.indexOf(p.time);
       const t = data.hourly.temperature_2m[hIdx];
-      return `<text x="${p.x.toFixed(1)}" y="${(yTemp(t) - 10).toFixed(1)}" class="chart-temp-label" text-anchor="middle">${Math.round(t)}&deg;</text>`;
+      const y = Math.max(yTemp(t) - 10, 10);
+      return `<text x="${p.x.toFixed(1)}" y="${y.toFixed(1)}" class="chart-temp-label" text-anchor="middle">${Math.round(t)}&deg;</text>`;
     })
     .join("");
 
@@ -173,9 +172,9 @@ function renderTodayChart(data) {
       <polyline points="${linePath}" class="chart-line" fill="none" />
       ${tempLabels}
       ${hourLabels}
-      <line class="hover-guide" x1="0" x2="0" y1="0" y2="${tempBandHeight}" />
+      <line class="hover-guide" x1="0" x2="0" y1="0" y2="${plotHeight}" />
       <circle class="hover-dot" r="5" cx="0" cy="0" />
-      <rect class="chart-hit-area" x="${padX}" y="0" width="${plotWidth}" height="${tempBandHeight}" fill="transparent" />
+      <rect class="chart-hit-area" x="${padX}" y="0" width="${plotWidth}" height="${plotHeight}" fill="transparent" />
     </svg>
   `;
 
@@ -415,8 +414,21 @@ function setupAsk() {
 
     try {
       const session = await ensureChatSession();
-      logEntry("status", "Thinking…");
-      const answer = await session.prompt(question);
+
+      // Two turns rather than one: a small on-device model does better at
+      // combining two separate data series (temp + rain%) into a judgment
+      // when it's first made to say what the question actually needs and
+      // whether that's covered, instead of jumping straight to an answer.
+      // Both turns land in the same session, so the answer turn has the
+      // unpacking already in its own context for free.
+      logEntry("status", "Understanding question…");
+      const unpack = await session.prompt(
+        `Before answering, in one short line: what data does this question need, and is it covered above? Question: "${question}"`
+      );
+      logEntry("reasoning", unpack);
+
+      logEntry("status", "Answering…");
+      const answer = await session.prompt(`Now answer in 1-2 sentences using that.`);
       logEntry("answer", answer);
     } catch (err) {
       logEntry("error", `Error: ${err.message}`);

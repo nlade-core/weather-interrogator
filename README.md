@@ -11,11 +11,12 @@ Weather APIs return a wall of hourly arrays. Most questions people actually have
 ## MVP (current)
 
 - Fetch Open-Meteo's forecast endpoint for Edinburgh: current conditions, hourly, and 15-minutely temperature through midnight
-- Chart shows temperature at 15-minute resolution (a visibly smoother, more precise line than hourly) with a rain-probability bar strip underneath, Apple Weather-style solid blocks at 15-min granularity (holding each hour's value — that's the real native resolution, no finer probability data exists); both series share one time axis so they line up correctly; raw JSON available collapsed
+- Chart shows temperature at 15-minute resolution (a visibly smoother, more precise line than hourly) with rain probability as a full-height, low-opacity wash behind it, Apple Weather-style — 100% reaches the top of the chart, faded enough that the temperature line stays readable through it. Both series share one time axis so they line up correctly; raw JSON available collapsed
 - Custom hover (dashed guide line, snapped highlight, floating tooltip) instead of native title-tooltips — same interaction pattern as Plotly/Yr, hand-rolled with no charting library
 - "Ask" is wired to Chrome's built-in Gemini Nano (Prompt API) — on-device, no server. Edinburgh's 15-minute temperature forecast and hourly rain probability for the rest of today are baked into one persistent session's system prompt at creation time, so follow-up questions share context instead of starting fresh each time
+- Each question runs as two turns in that session rather than one: first a short "what does this need, is it covered" unpacking step, then the answer — small on-device models do better at combining two data series into a judgment when made to state what's needed before answering, rather than jumping straight there
 - The model is pre-warmed at page load when it's already downloaded; a "downloadable" state waits for your first Ask click to trigger anything, with real download-progress percentages shown rather than a page that just looks stuck
-- A visible log (status pill + a running log under Ask) surfaces every state transition — preparing, downloading, thinking, error — instead of failing silently
+- Chat-style log under Ask: your question right-aligned, the model's reasoning step and answer left-aligned and visually distinct, status/error lines centered — every state transition (preparing, downloading, understanding, answering, error) visible instead of failing silently
 - No build step, no dependencies — plain HTML/CSS/JS
 
 ## Roadmap
