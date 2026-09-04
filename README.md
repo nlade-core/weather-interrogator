@@ -30,3 +30,5 @@ Weather APIs return a wall of hourly arrays. Most questions people actually have
 Static HTML/CSS/JS, deployed via GitHub Pages. No build step, no API key, no tracking.
 
 `css/style.css` and `js/app.js` are linked with a `?v=N` query string in `index.html`. Bump `N` whenever either file changes — Safari caches GH Pages assets aggressively and won't otherwise pick up the update.
+
+The footer's "Deployed" timestamp is hand-set in `index.html` on every push (no CI/build step for a repo this size) — update it to the current Europe/London time alongside whatever else changed in that commit.

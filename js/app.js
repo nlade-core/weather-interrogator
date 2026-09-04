@@ -150,8 +150,77 @@ function renderTodayChart(data) {
       ${dots}
       ${tempLabels}
       ${hourLabels}
+      <line class="hover-guide" x1="0" x2="0" y1="0" y2="${tempBandHeight}" />
+      <circle class="hover-dot" r="5" cx="0" cy="0" />
+      <rect class="chart-hit-area" x="${padX}" y="0" width="${plotWidth}" height="${tempBandHeight}" fill="transparent" />
     </svg>
   `;
+
+  attachChartHover(wrap, points);
+}
+
+function attachChartHover(wrap, points) {
+  const svg = wrap.querySelector(".chart-svg");
+  const guide = svg.querySelector(".hover-guide");
+  const hoverDot = svg.querySelector(".hover-dot");
+  const hitArea = svg.querySelector(".chart-hit-area");
+  const tooltip = getChartTooltip();
+
+  function nearestPoint(svgX) {
+    let nearest = points[0];
+    let minDist = Infinity;
+    for (const p of points) {
+      const d = Math.abs(p.x - svgX);
+      if (d < minDist) {
+        minDist = d;
+        nearest = p;
+      }
+    }
+    return nearest;
+  }
+
+  function onMove(evt) {
+    const rect = svg.getBoundingClientRect();
+    const scale = CHART.width / rect.width;
+    const svgX = (evt.clientX - rect.left) * scale;
+    const p = nearestPoint(svgX);
+
+    guide.setAttribute("x1", p.x);
+    guide.setAttribute("x2", p.x);
+    guide.classList.add("visible");
+
+    hoverDot.setAttribute("cx", p.x);
+    hoverDot.setAttribute("cy", p.yTemp);
+    hoverDot.classList.add("visible");
+
+    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong> at ${formatHour(p.time)}<br>${p.precip}% rain chance`;
+    tooltip.classList.add("visible");
+
+    const screenX = rect.left + p.x / scale;
+    const screenY = rect.top + p.yTemp / scale;
+    tooltip.style.left = `${screenX}px`;
+    tooltip.style.top = `${screenY - 10}px`;
+  }
+
+  function onLeave() {
+    guide.classList.remove("visible");
+    hoverDot.classList.remove("visible");
+    tooltip.classList.remove("visible");
+  }
+
+  hitArea.addEventListener("pointermove", onMove);
+  hitArea.addEventListener("pointerleave", onLeave);
+}
+
+function getChartTooltip() {
+  let tooltip = document.getElementById("chart-tooltip");
+  if (!tooltip) {
+    tooltip = document.createElement("div");
+    tooltip.id = "chart-tooltip";
+    tooltip.className = "chart-tooltip";
+    document.body.appendChild(tooltip);
+  }
+  return tooltip;
 }
 
 function renderRaw(data) {
