@@ -234,15 +234,15 @@ function renderTodayChart(data) {
     .map((p) => `<text x="${p.x.toFixed(1)}" y="${(plotTop + plotHeight + 18).toFixed(1)}" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
     .join("");
 
-  // Top strip, stacked: condition icons above, wind arrow+speed below --
-  // both fixed-position (not line-following) so they stack predictably
-  // rather than the wind row having to chase a moving icon row. weathercode
-  // is genuine 15-min data (confirmed derived per-timestep from cloud_cover
-  // etc., not hourly-native), same grid as everything else -- no repetition.
+  // Icons ride the temperature line (Yr-style) rather than sitting in the
+  // fixed top strip -- trying this again now that wind is a single compact
+  // glyph rather than two stacked rows. Clamped to a minimum y so a point
+  // near the top of the range can't push its icon off-screen.
   const conditionIcons = points
     .map((p) => {
       const icon = describeCode(p.code)[1];
-      return `<text x="${p.x.toFixed(1)}" y="14" class="chart-icon-label" text-anchor="middle">${icon}</text>`;
+      const y = Math.max(p.yTemp - 12, 10);
+      return `<text x="${p.x.toFixed(1)}" y="${y.toFixed(1)}" class="chart-icon-label" text-anchor="middle">${icon}</text>`;
     })
     .join("");
 
