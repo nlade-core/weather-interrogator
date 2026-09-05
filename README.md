@@ -34,6 +34,10 @@ Weather APIs return a wall of hourly arrays. Most questions people actually have
 - [ ] Idea, paused: once rain probability/expected-rainfall is properly reintroduced (see the paused ensemble item above), present it as a distribution rather than a single number — e.g. a raindrop-shaped, blue-coloured visual conveying spread/uncertainty rather than one point estimate. Not started
 - [ ] Multi-day view for weekend-scale questions
 - [ ] Consider a location picker beyond Edinburgh
+- [ ] **Next session priority — pivot from chart cosmetics to the LLM side, which is overdue.** Recent work (icon density, wind glyph shape, top/bottom position) was cosmetic iteration on the chart, several changes reverted — good to redirect before more of that. Plan, in order:
+  1. `apparent_temperature` and `uv_index` into the system prompt (cheap, closes the gap — Ask currently can't really answer "is it worth a BBQ," the project's original stated goal, with only temp/mm/wind/conditions)
+  2. Actually test that judgment-call question end-to-end once those are in
+  3. **Idea worth pursuing after that: live computer vision via the on-device model.** `chrome-chat` (a separate project) already has working multimodal image support with Gemini Nano (`expectedInputs: [{ type: 'image' }]`, attachment handling) — the hard part is already solved elsewhere. Concept: webcam frame via `getUserMedia`, fed to the model alongside the forecast context, asking whether the actual sky matches what UKV predicted. Fits the project's on-device/no-server philosophy, and is a natural extension of this session's running theme (does the forecast actually match reality — the 90%/0mm investigation, the resolution-mismatch digging) rather than a bolted-on gimmick
 
 ## Data notes
 
