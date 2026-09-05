@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>weather-interrogator</title>
-<link rel="stylesheet" href="css/style.css?v=16">
+<link rel="stylesheet" href="css/style.css?v=17">
 </head>
 <body>
 
@@ -35,6 +35,25 @@
     </div>
   </section>
 
+  <section class="panel webcam-stub">
+    <h2>Look outside <span id="webcam-status-pill" class="stub-badge">checking&hellip;</span></h2>
+    <p class="stub-note">Point a webcam out of a window. The on-device model looks at one frame and says what it thinks the weather is &mdash; no comparison to the forecast yet, that's next.</p>
+
+    <div class="webcam-area">
+      <video id="webcam-video" class="webcam-video" autoplay playsinline muted></video>
+      <canvas id="webcam-canvas" class="webcam-canvas" hidden></canvas>
+    </div>
+
+    <div class="webcam-controls">
+      <button id="webcam-start" type="button">Start camera</button>
+      <button id="webcam-capture" type="button" disabled>What's the weather?</button>
+    </div>
+
+    <div id="webcam-log" class="ask-log">
+      <p class="log-entry log-status">Camera not started.</p>
+    </div>
+  </section>
+
   <details class="panel raw-details">
     <summary>Raw response</summary>
     <pre id="raw-output" class="raw-output">&hellip;</pre>
@@ -43,9 +62,9 @@
 
 <footer class="site-footer">
   <p>Data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>. No API key, no tracking. On-device model, no server.</p>
-  <p class="deploy-stamp">Deployed 2026-09-05 09:07 (Europe/London)</p>
+  <p class="deploy-stamp">Deployed 2026-09-05 09:40 (Europe/London)</p>
 </footer>
 
-<script src="js/app.js?v=25"></script>
+<script src="js/app.js?v=26"></script>
 </body>
 </html>

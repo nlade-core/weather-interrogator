@@ -478,14 +478,14 @@ let forecastPromise = null;
 let chatSession = null; // Promise<session> | null, persistent once created
 let promptOk = false;
 
-function setStatusPill(className, text) {
-  const pill = document.getElementById("model-status-pill");
+function setStatusPill(className, text, pillId = "model-status-pill") {
+  const pill = document.getElementById(pillId);
   pill.className = `stub-badge ${className}`;
   pill.textContent = text;
 }
 
-function logEntry(kind, text) {
-  const log = document.getElementById("ask-log");
+function logEntry(kind, text, logId = "ask-log") {
+  const log = document.getElementById(logId);
   const p = document.createElement("p");
   p.className = `log-entry log-${kind}`;
   p.textContent = text;
@@ -584,6 +584,122 @@ function setupAsk() {
   });
 }
 
+// --- Webcam weather detector (v1) ----------------------------------------
+// Point a camera outside, grab one frame, ask the on-device model what it
+// thinks the weather is. No comparison to the forecast yet -- that's the
+// obvious next step once this works reliably on its own.
+
+const WEBCAM_SYSTEM_PROMPT = `You are shown a single photo taken from a webcam pointed outdoors. Describe the weather you can see: sky condition, whether it looks like it's raining or snowing, and roughly how bright/overcast it is. If the image doesn't show anything useful (e.g. pointed indoors, too dark, unclear), say so plainly instead of guessing. Keep it to 1-2 sentences.`;
+
+let webcamStream = null;
+let webcamSession = null; // Promise<session> | null, separate from the text-only Ask session (different expectedInputs)
+let webcamPromptOk = false;
+let webcamCameraOn = false;
+
+async function checkWebcamCapability() {
+  if (!self.LanguageModel) {
+    setStatusPill("missing", "not in this browser", "webcam-status-pill");
+    return;
+  }
+  try {
+    const availability = await withTimeout(LanguageModel.availability({ expectedInputs: [{ type: "image" }] }), 5000);
+    webcamPromptOk = availability !== "unavailable";
+    setStatusPill(availability, availability === "downloadable" ? "needs download" : availability, "webcam-status-pill");
+  } catch (err) {
+    setStatusPill("unavailable", `error: ${err.message}`, "webcam-status-pill");
+  }
+  document.getElementById("webcam-capture").disabled = !(webcamPromptOk && webcamCameraOn);
+}
+
+function ensureWebcamSession() {
+  if (webcamSession) return webcamSession;
+
+  webcamSession = (async () => {
+    setStatusPill("preparing", "preparing model…", "webcam-status-pill");
+
+    const session = await LanguageModel.create({
+      initialPrompts: [{ role: "system", content: WEBCAM_SYSTEM_PROMPT }],
+      expectedInputs: [{ type: "text" }, { type: "image" }],
+      monitor(m) {
+        m.addEventListener("downloadprogress", (e) => {
+          const pct = Math.round(e.loaded * 100);
+          setStatusPill("preparing", `downloading model… ${pct}%`, "webcam-status-pill");
+          logEntry("status", `Downloading model… ${pct}%`, "webcam-log");
+        });
+      },
+    });
+
+    setStatusPill("available", "ready", "webcam-status-pill");
+    return session;
+  })();
+
+  webcamSession.catch(() => { webcamSession = null; });
+
+  return webcamSession;
+}
+
+async function startWebcam() {
+  const video = document.getElementById("webcam-video");
+  const startBtn = document.getElementById("webcam-start");
+  const captureBtn = document.getElementById("webcam-capture");
+
+  startBtn.disabled = true;
+  try {
+    webcamStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    video.srcObject = webcamStream;
+    startBtn.textContent = "Camera on";
+    webcamCameraOn = true;
+    captureBtn.disabled = !webcamPromptOk;
+    logEntry("status", "Camera started. Point it out of a window, then ask.", "webcam-log");
+  } catch (err) {
+    logEntry("error", `Couldn't start camera: ${err.message}`, "webcam-log");
+    startBtn.disabled = false;
+  }
+}
+
+function captureFrameAsBlob() {
+  const video = document.getElementById("webcam-video");
+  const canvas = document.getElementById("webcam-canvas");
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+}
+
+function setupWebcam() {
+  document.getElementById("webcam-start").addEventListener("click", startWebcam);
+
+  document.getElementById("webcam-capture").addEventListener("click", async () => {
+    const captureBtn = document.getElementById("webcam-capture");
+    captureBtn.disabled = true;
+
+    try {
+      const frame = await captureFrameAsBlob();
+      if (!frame) throw new Error("couldn't capture a frame");
+
+      logEntry("status", "Looking…", "webcam-log");
+      const session = await ensureWebcamSession();
+      const answer = await session.prompt([
+        {
+          role: "user",
+          content: [
+            { type: "text", value: "What's the weather like in this image?" },
+            { type: "image", value: frame },
+          ],
+        },
+      ]);
+      logEntry("answer", answer, "webcam-log");
+    } catch (err) {
+      logEntry("error", `Error: ${err.message}`, "webcam-log");
+    } finally {
+      captureBtn.disabled = !webcamPromptOk;
+    }
+  });
+}
+
 setupAsk();
 checkModelCapability();
 forecastPromise = loadForecast();
+
+setupWebcam();
+checkWebcamCapability();
