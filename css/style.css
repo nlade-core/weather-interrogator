@@ -247,6 +247,28 @@ main {
   margin-bottom: 0.2rem;
 }
 
+.log-entry.log-lookup {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-family: var(--mono);
+  white-space: pre-wrap;
+}
+
+.log-entry.log-lookup::before {
+  content: "data pulled";
+  display: block;
+  font-style: normal;
+  font-family: var(--font);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+  margin-bottom: 0.2rem;
+}
+
 .log-entry.log-answer {
   align-self: flex-start;
   background: var(--panel);

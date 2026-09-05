@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>weather-interrogator</title>
-<link rel="stylesheet" href="css/style.css?v=17">
+<link rel="stylesheet" href="css/style.css?v=18">
 </head>
 <body>
 
@@ -18,13 +18,13 @@
 
   <section class="panel">
     <div id="current-card" class="current-card"></div>
-    <h2>Rest of today</h2>
+    <h2>Next 12 hours</h2>
     <div id="today-chart" class="chart-wrap"></div>
   </section>
 
   <section class="panel llm-stub">
     <h2>Ask <span id="model-status-pill" class="stub-badge">checking&hellip;</span></h2>
-    <p class="stub-note">Preloaded with Edinburgh's 15-minute temperature forecast for the rest of today. Runs on-device via Chrome's built-in Gemini Nano &mdash; nothing you type here is sent to a server. The session stays open, so follow-up questions keep context. Requires desktop Chrome with the Prompt API available.</p>
+    <p class="stub-note">Covers the next 12 hours only. Runs on-device via Chrome's built-in Gemini Nano &mdash; nothing you type here is sent to a server. Rather than dumping the whole forecast into one prompt (this size of model gets lost in the numbers), each question goes through a few visible steps below: what you're actually asking, what data that needs, a lookup, then an answer &mdash; so it's easy to see exactly where a wrong answer comes from. Requires desktop Chrome with the Prompt API available.</p>
 
     <form id="ask-form" class="ask-form">
       <input id="ask-input" type="text" placeholder="e.g. Is it worth a BBQ this weekend?" autocomplete="off">
@@ -62,9 +62,9 @@
 
 <footer class="site-footer">
   <p>Data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>. No API key, no tracking. On-device model, no server.</p>
-  <p class="deploy-stamp">Deployed 2026-09-05 09:48 (Europe/London)</p>
+  <p class="deploy-stamp">Deployed 2026-09-05 10:31 (Europe/London)</p>
 </footer>
 
-<script src="js/app.js?v=27"></script>
+<script src="js/app.js?v=28"></script>
 </body>
 </html>

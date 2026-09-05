@@ -134,14 +134,14 @@ function niceTemperatureTicks(min, max) {
   return ticks;
 }
 
-function remainingTodayIndices(times, now) {
-  const midnight = new Date(now);
-  midnight.setHours(24, 0, 0, 0);
+const CONTEXT_HOURS = 12; // both the chart and the model's data window -- fixed forward-looking span rather than "rest of today", so it behaves the same at 8am and at 11pm
 
+function nextHoursIndices(times, now, hours) {
+  const cutoff = new Date(now.getTime() + hours * 3600 * 1000);
   const idxs = [];
   times.forEach((t, i) => {
     const ts = new Date(t);
-    if (ts >= now && ts < midnight) idxs.push(i);
+    if (ts >= now && ts < cutoff) idxs.push(i);
   });
   return idxs;
 }
@@ -149,15 +149,13 @@ function remainingTodayIndices(times, now) {
 function renderTodayChart(data) {
   const wrap = document.getElementById("today-chart");
   const now = new Date(data.current.time);
-  const midnight = new Date(now);
-  midnight.setHours(24, 0, 0, 0);
-  const spanMs = midnight - now;
+  const spanMs = CONTEXT_HOURS * 3600 * 1000;
 
-  const tempIdxs = remainingTodayIndices(data.minutely_15.time, now);
-  const precipIdxs = remainingTodayIndices(data.hourly.time, now);
+  const tempIdxs = nextHoursIndices(data.minutely_15.time, now, CONTEXT_HOURS);
+  const precipIdxs = nextHoursIndices(data.hourly.time, now, CONTEXT_HOURS);
 
   if (tempIdxs.length < 2) {
-    wrap.innerHTML = `<p class="chart-empty">Not much of today left to chart &mdash; check back after midnight.</p>`;
+    wrap.innerHTML = `<p class="chart-empty">Not enough forecast data to chart the next ${CONTEXT_HOURS} hours.</p>`;
     return;
   }
 
@@ -235,13 +233,20 @@ function renderTodayChart(data) {
 
   // Hour labels: moved to the top, matching the usual chart convention
   // (time axis reads top-to-bottom-then-across, not buried at the bottom).
-  // Date shown once on its own line above -- the chart only ever spans a
-  // single calendar day, and prefixing it onto the first hour label
-  // collided with the next one (the date string is wider than the gap
-  // between hourly ticks).
-  const dateLabel = precipPoints.length
-    ? `<text x="${padLeft}" y="10" class="chart-axis-label" text-anchor="start">${formatDayMonth(precipPoints[0].time)}</text>`
-    : "";
+  // Date shown on its own line above -- printed once at the start, and
+  // again at whichever tick crosses into a new calendar day, since a fixed
+  // 12h window (unlike the old "rest of today" one) can span midnight.
+  let lastDate = null;
+  const dateLabel = precipPoints
+    .map((p, i) => {
+      const label = formatDayMonth(p.time);
+      if (label === lastDate) return "";
+      lastDate = label;
+      const anchor = i === 0 ? "start" : "middle";
+      const x = i === 0 ? padLeft : p.x;
+      return `<text x="${x.toFixed(1)}" y="10" class="chart-axis-label" text-anchor="${anchor}">${label}</text>`;
+    })
+    .join("");
   const hourLabels = precipPoints
     .map((p) => `<text x="${p.x.toFixed(1)}" y="22" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
     .join("");
@@ -407,7 +412,12 @@ async function loadForecast() {
   }
 }
 
-const WEATHER_SYSTEM_PROMPT = `Weather assistant for Edinburgh. Use only the data below, don't invent numbers. Temperature, rain amount, and wind (speed+direction) are readings every 15 minutes; wind gusts and conditions are hourly. No rain-probability figure is provided (deliberately — the available one wasn't locally reliable), no other days — say so if asked. Keep answers to 1-2 sentences.`;
+// System prompt deliberately describes what data exists rather than
+// containing the data itself -- a small on-device model reasons far worse
+// once its context is full of raw numbers than when it's asked to work in
+// stages. Real numbers only enter context per-question, and only the
+// categories that question actually needs (see the staged Ask flow below).
+const WEATHER_SYSTEM_PROMPT = `Weather assistant for Edinburgh, covering only the next ${CONTEXT_HOURS} hours from now (no other days, no rain-probability figure -- deliberately not provided, the available one wasn't locally reliable). You don't have any weather numbers yet: for each question, you'll first be asked to restate what the person actually wants to know, then which data categories would help, then you'll be given only that data to answer with. Keep every answer to 1-2 sentences, and say so plainly if the data you're given isn't enough to answer confidently -- don't guess.`;
 
 function withTimeout(promise, ms) {
   return Promise.race([
@@ -416,53 +426,51 @@ function withTimeout(promise, ms) {
   ]);
 }
 
-function buildWeatherContext(data) {
+// Fixed vocabulary the "what data is needed" step picks from -- a closed
+// set rather than free text is what makes the following lookup step a
+// genuine simple lookup instead of another fuzzy-parsing problem.
+const CATEGORY_MATCHERS = [
+  ["temperature", /temp/i],
+  ["rain", /rain|precip/i],
+  ["wind", /\bwind\b/i],
+  ["gusts", /gust/i],
+  ["conditions", /condition|cloud|sky|overcast|storm|snow|fog/i],
+];
+const DEFAULT_CATEGORIES = ["temperature", "rain", "conditions"];
+
+function matchCategories(text) {
+  const found = CATEGORY_MATCHERS.filter(([, re]) => re.test(text)).map(([name]) => name);
+  return found.length ? found : DEFAULT_CATEGORIES;
+}
+
+// The "simple lookup" step: plain deterministic code, no model involved.
+// Pulls only the requested categories, only for the next CONTEXT_HOURS --
+// this is what keeps each question's numeric payload small regardless of
+// how much data the app actually has on hand.
+function lookupWeatherData(data, categories) {
   const now = new Date(data.current.time);
   const [desc] = describeCode(data.current.weathercode);
+  const idxs15 = nextHoursIndices(data.minutely_15.time, now, CONTEXT_HOURS);
+  const idxsHourly = nextHoursIndices(data.hourly.time, now, CONTEXT_HOURS);
 
-  const tempIdxs = remainingTodayIndices(data.minutely_15.time, now);
-  const tempSeries = tempIdxs
-    .map((i) => `${formatHour(data.minutely_15.time[i])}=${data.minutely_15.temperature_2m[i].toFixed(1)}`)
-    .join(",");
+  const builders = {
+    // Same preceding-interval shift as the chart: the reading at index i+1
+    // is the one actually in force during the slot at index i.
+    temperature: () => `Temperature next ${CONTEXT_HOURS}h (15-min, HH:MM=C): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${data.minutely_15.temperature_2m[i].toFixed(1)}`).join(",")}`,
+    rain: () => `Rain amount next ${CONTEXT_HOURS}h (15-min mm, HH:MM=mm): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${(data.minutely_15.precipitation[i + 1] ?? 0).toFixed(1)}`).join(",")}`,
+    wind: () => `Wind next ${CONTEXT_HOURS}h (15-min, HH:MM=km/h+direction): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${Math.round(data.minutely_15.wind_speed_10m[i])}${compassLabel(data.minutely_15.wind_direction_10m[i])}`).join(",")}`,
+    // wind_gusts_10m is a preceding-hour max, same convention precipitation_
+    // probability had -- shifted back one position so the reading lines up
+    // with the hour it's actually in force for, not the hour it's filed under.
+    gusts: () => `Wind gusts next ${CONTEXT_HOURS}h (hourly peak km/h, HH:MM=km/h): ${idxsHourly.map((i) => `${formatHour(data.hourly.time[i])}=${Math.round(data.hourly.wind_gusts_10m[i + 1])}`).join(",")}`,
+    // weathercode lives on minutely_15 (see fetch config) -- kept at hourly
+    // cadence here to match the on-the-hour marks the other hourly field uses.
+    conditions: () => `Conditions next ${CONTEXT_HOURS}h (hourly, HH:MM=type): ${idxsHourly.map((i) => { const mIdx = data.minutely_15.time.indexOf(data.hourly.time[i]); return `${formatHour(data.hourly.time[i])}=${conditionLabel(data.minutely_15.weathercode[mIdx])}`; }).join(",")}`,
+  };
 
-  // Same preceding-interval shift as the chart: the reading at index i+1
-  // is the one actually in force during the slot at index i.
-  const mmSeries = tempIdxs
-    .map((i) => `${formatHour(data.minutely_15.time[i])}=${(data.minutely_15.precipitation[i + 1] ?? 0).toFixed(1)}`)
-    .join(",");
-
-  const windSeries = tempIdxs
-    .map((i) => `${formatHour(data.minutely_15.time[i])}=${Math.round(data.minutely_15.wind_speed_10m[i])}${compassLabel(data.minutely_15.wind_direction_10m[i])}`)
-    .join(",");
-
-  const precipIdxs = remainingTodayIndices(data.hourly.time, now);
-  // weathercode moved to minutely_15 (see fetch config) -- kept at hourly
-  // cadence here to match the on-the-hour marks the rest of this series
-  // set uses, not to blow up the prompt to 15-min granularity for every
-  // field.
-  const conditionSeries = precipIdxs
-    .map((i) => {
-      const mIdx = data.minutely_15.time.indexOf(data.hourly.time[i]);
-      return `${formatHour(data.hourly.time[i])}=${conditionLabel(data.minutely_15.weathercode[mIdx])}`;
-    })
-    .join(",");
-
-  // wind_gusts_10m is a preceding-hour max, same convention precipitation_
-  // probability had -- shifted back one position so the reading lines up
-  // with the hour it's actually in force for, not the hour it's filed
-  // under.
-  const gustSeries = precipIdxs
-    .map((i) => `${formatHour(data.hourly.time[i])}=${Math.round(data.hourly.wind_gusts_10m[i + 1])}`)
-    .join(",");
-
-  return [
-    `Current: ${data.current.temperature_2m.toFixed(1)}C, ${desc.toLowerCase()}, wind ${Math.round(data.current.wind_speed_10m)}km/h.`,
-    `Temp forecast today (15-min, HH:MM=C): ${tempSeries}`,
-    `Rain amount today (15-min mm, HH:MM=mm): ${mmSeries}`,
-    `Wind today (15-min, HH:MM=km/h+direction): ${windSeries}`,
-    `Wind gusts today (hourly peak km/h, HH:MM=km/h): ${gustSeries}`,
-    `Conditions today (hourly, HH:MM=type): ${conditionSeries}`,
-  ].join(" ");
+  const lines = [`Current: ${data.current.temperature_2m.toFixed(1)}C, ${desc.toLowerCase()}, wind ${Math.round(data.current.wind_speed_10m)}km/h.`];
+  categories.forEach((c) => { if (builders[c]) lines.push(builders[c]()); });
+  return lines.join("\n");
 }
 
 // --- Model loading -------------------------------------------------------
@@ -520,11 +528,9 @@ function ensureChatSession() {
 
   chatSession = (async () => {
     setStatusPill("preparing", "preparing model…");
-    const data = await forecastPromise;
-    const systemPrompt = `${WEATHER_SYSTEM_PROMPT}\n\n${buildWeatherContext(data)}`;
 
     const session = await LanguageModel.create({
-      initialPrompts: [{ role: "system", content: systemPrompt }],
+      initialPrompts: [{ role: "system", content: WEATHER_SYSTEM_PROMPT }],
       monitor(m) {
         m.addEventListener("downloadprogress", (e) => {
           const pct = Math.round(e.loaded * 100);
@@ -560,21 +566,39 @@ function setupAsk() {
 
     try {
       const session = await ensureChatSession();
+      const data = latestData ?? (await forecastPromise);
 
-      // Two turns rather than one: a small on-device model does better at
-      // combining two separate data series (temp + rain%) into a judgment
-      // when it's first made to say what the question actually needs and
-      // whether that's covered, instead of jumping straight to an answer.
-      // Both turns land in the same session, so the answer turn has the
-      // unpacking already in its own context for free.
-      logEntry("status", "Understanding question…");
-      const unpack = await session.prompt(
-        `Before answering, in one short line: what data does this question need, and is it covered above? Question: "${question}"`
+      // Staged rather than one-shot: a model this small gets lost combining
+      // several raw data series into a judgment in a single pass. Splitting
+      // "what do they actually want" from "what data answers that" from
+      // "here's just that data" keeps each turn's job small, and surfaces
+      // each stage in the log so a wrong final answer can be traced back to
+      // whichever step actually went wrong, rather than being a black box.
+      logEntry("status", "Understanding what you're asking…");
+      const goal = await session.prompt(
+        `A user asked a weather assistant: "${question}". In one short sentence, restate what they actually want to know or decide -- not the data, just their underlying goal.`
       );
-      logEntry("reasoning", unpack);
+      logEntry("reasoning", `Goal: ${goal}`);
+
+      logEntry("status", "Deciding what data is needed…");
+      const categoriesRaw = await session.prompt(
+        `Available data categories for the next ${CONTEXT_HOURS} hours: temperature, rain amount, wind (speed+direction), wind gusts, conditions (sky/precipitation type). Given the goal "${goal}", which categories are actually needed to answer it? List just the relevant category names.`
+      );
+      logEntry("reasoning", `Data needed: ${categoriesRaw}`);
+
+      const categories = matchCategories(categoriesRaw);
+      if (categories === DEFAULT_CATEGORIES) {
+        logEntry("status", `Couldn't parse a specific data need — falling back to: ${categories.join(", ")}`);
+      }
+
+      logEntry("status", `Looking up: ${categories.join(", ")}…`);
+      const lookupText = lookupWeatherData(data, categories);
+      logEntry("lookup", lookupText);
 
       logEntry("status", "Answering…");
-      const answer = await session.prompt(`Now answer in 1-2 sentences using that.`);
+      const answer = await session.prompt(
+        `Goal: ${goal}\nRelevant data only:\n${lookupText}\n\nAnswer the original question ("${question}") in 1-2 sentences using only this data.`
+      );
       logEntry("answer", answer);
     } catch (err) {
       logEntry("error", `Error: ${err.message}`);
