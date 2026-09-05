@@ -550,10 +550,46 @@ function ensureChatSession() {
   return chatSession;
 }
 
+// Staged rather than one-shot: a model this small gets lost combining
+// several raw data series into a judgment in a single pass. Splitting
+// "what do they actually want" from "what data answers that" from "here's
+// just that data" keeps each turn's job small, and surfaces each stage in
+// the log so a wrong final answer can be traced back to whichever step
+// actually went wrong, rather than being a black box. Runs only for the
+// first question of a session -- see askedBefore in setupAsk.
+async function runStagedAsk(session, question, data) {
+  logEntry("status", "Understanding what you're asking…");
+  const goal = await session.prompt(
+    `A user asked a weather assistant: "${question}". In one short sentence, restate what they actually want to know or decide -- not the data, just their underlying goal.`
+  );
+  logEntry("reasoning", `Goal: ${goal}`);
+
+  logEntry("status", "Deciding what data is needed…");
+  const categoriesRaw = await session.prompt(
+    `Available data categories for the next ${CONTEXT_HOURS} hours: temperature, rain amount, wind (speed+direction), wind gusts, conditions (sky/precipitation type). Given the goal "${goal}", which categories are actually needed to answer it? List just the relevant category names.`
+  );
+  logEntry("reasoning", `Data needed: ${categoriesRaw}`);
+
+  const categories = matchCategories(categoriesRaw);
+  if (categories === DEFAULT_CATEGORIES) {
+    logEntry("status", `Couldn't parse a specific data need — falling back to: ${categories.join(", ")}`);
+  }
+
+  logEntry("status", `Looking up: ${categories.join(", ")}…`);
+  const lookupText = lookupWeatherData(data, categories);
+  logEntry("lookup", lookupText);
+
+  logEntry("status", "Answering…");
+  return session.prompt(
+    `Goal: ${goal}\nRelevant data only:\n${lookupText}\n\nAnswer the original question ("${question}") in 1-2 sentences using only this data.`
+  );
+}
+
 function setupAsk() {
   const form = document.getElementById("ask-form");
   const input = document.getElementById("ask-input");
   const submitBtn = document.getElementById("ask-submit");
+  let askedBefore = false; // first question in a session gets the full staged pipeline; follow-ups just answer directly against the context already built up -- a follow-up-specific pipeline is a later idea, not this one
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -566,39 +602,16 @@ function setupAsk() {
 
     try {
       const session = await ensureChatSession();
-      const data = latestData ?? (await forecastPromise);
 
-      // Staged rather than one-shot: a model this small gets lost combining
-      // several raw data series into a judgment in a single pass. Splitting
-      // "what do they actually want" from "what data answers that" from
-      // "here's just that data" keeps each turn's job small, and surfaces
-      // each stage in the log so a wrong final answer can be traced back to
-      // whichever step actually went wrong, rather than being a black box.
-      logEntry("status", "Understanding what you're asking…");
-      const goal = await session.prompt(
-        `A user asked a weather assistant: "${question}". In one short sentence, restate what they actually want to know or decide -- not the data, just their underlying goal.`
-      );
-      logEntry("reasoning", `Goal: ${goal}`);
-
-      logEntry("status", "Deciding what data is needed…");
-      const categoriesRaw = await session.prompt(
-        `Available data categories for the next ${CONTEXT_HOURS} hours: temperature, rain amount, wind (speed+direction), wind gusts, conditions (sky/precipitation type). Given the goal "${goal}", which categories are actually needed to answer it? List just the relevant category names.`
-      );
-      logEntry("reasoning", `Data needed: ${categoriesRaw}`);
-
-      const categories = matchCategories(categoriesRaw);
-      if (categories === DEFAULT_CATEGORIES) {
-        logEntry("status", `Couldn't parse a specific data need — falling back to: ${categories.join(", ")}`);
+      let answer;
+      if (!askedBefore) {
+        const data = latestData ?? (await forecastPromise);
+        answer = await runStagedAsk(session, question, data);
+        askedBefore = true;
+      } else {
+        logEntry("status", "Answering…");
+        answer = await session.prompt(question);
       }
-
-      logEntry("status", `Looking up: ${categories.join(", ")}…`);
-      const lookupText = lookupWeatherData(data, categories);
-      logEntry("lookup", lookupText);
-
-      logEntry("status", "Answering…");
-      const answer = await session.prompt(
-        `Goal: ${goal}\nRelevant data only:\n${lookupText}\n\nAnswer the original question ("${question}") in 1-2 sentences using only this data.`
-      );
       logEntry("answer", answer);
     } catch (err) {
       logEntry("error", `Error: ${err.message}`);
