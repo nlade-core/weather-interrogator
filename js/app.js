@@ -647,14 +647,29 @@ async function startWebcam() {
   try {
     webcamStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
     video.srcObject = webcamStream;
-    startBtn.textContent = "Camera on";
+    startBtn.textContent = "Stop camera";
     webcamCameraOn = true;
     captureBtn.disabled = !webcamPromptOk;
     logEntry("status", "Camera started. Point it out of a window, then ask.", "webcam-log");
   } catch (err) {
     logEntry("error", `Couldn't start camera: ${err.message}`, "webcam-log");
+  } finally {
     startBtn.disabled = false;
   }
+}
+
+function stopWebcam() {
+  const video = document.getElementById("webcam-video");
+  const startBtn = document.getElementById("webcam-start");
+  const captureBtn = document.getElementById("webcam-capture");
+
+  webcamStream.getTracks().forEach((track) => track.stop());
+  webcamStream = null;
+  video.srcObject = null;
+  startBtn.textContent = "Start camera";
+  webcamCameraOn = false;
+  captureBtn.disabled = true;
+  logEntry("status", "Camera stopped.", "webcam-log");
 }
 
 function captureFrameAsBlob() {
@@ -667,7 +682,10 @@ function captureFrameAsBlob() {
 }
 
 function setupWebcam() {
-  document.getElementById("webcam-start").addEventListener("click", startWebcam);
+  document.getElementById("webcam-start").addEventListener("click", () => {
+    if (webcamCameraOn) stopWebcam();
+    else startWebcam();
+  });
 
   document.getElementById("webcam-capture").addEventListener("click", async () => {
     const captureBtn = document.getElementById("webcam-capture");

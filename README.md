@@ -37,7 +37,11 @@ Weather APIs return a wall of hourly arrays. Most questions people actually have
 - [ ] **Next session priority — pivot from chart cosmetics to the LLM side, which is overdue.** Recent work (icon density, wind glyph shape, top/bottom position) was cosmetic iteration on the chart, several changes reverted — good to redirect before more of that. Plan, in order:
   1. `apparent_temperature` and `uv_index` into the system prompt (cheap, closes the gap — Ask currently can't really answer "is it worth a BBQ," the project's original stated goal, with only temp/mm/wind/conditions)
   2. Actually test that judgment-call question end-to-end once those are in
-  3. **Idea worth pursuing after that: live computer vision via the on-device model.** `chrome-chat` (a separate project) already has working multimodal image support with Gemini Nano (`expectedInputs: [{ type: 'image' }]`, attachment handling) — the hard part is already solved elsewhere. Concept: webcam frame via `getUserMedia`, fed to the model alongside the forecast context, asking whether the actual sky matches what UKV predicted. Fits the project's on-device/no-server philosophy, and is a natural extension of this session's running theme (does the forecast actually match reality — the 90%/0mm investigation, the resolution-mismatch digging) rather than a bolted-on gimmick
+  3. ~~Idea worth pursuing after that: live computer vision via the on-device model.~~ **Shipped as v1**: "Look outside" panel, `getUserMedia` + canvas frame capture + a separate `LanguageModel` session with `expectedInputs: [{ type: 'image' }]`, following `chrome-chat`'s working content-part shape. Standalone for now — just describes the sky from one frame, no comparison to the forecast yet.
+
+- [ ] **Webcam feature, next steps:**
+  1. Integrate it as an actual data source into the product — feed its read of the sky into the same context the Ask model uses (e.g. does the frame agree with what UKV predicted for right now), rather than it living as a separate disconnected panel.
+  2. **Current real friction: this only works with a laptop's own webcam, and carrying a laptop around to point out a window is impractical.** Right fix is getting the phone to sync with this properly (companion capture, or just phone-as-browser once there's a reason to make the site itself mobile-friendly) — parking this until that sync work exists rather than working around it with something disposable.
 
 ## Data notes
 
