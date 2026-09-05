@@ -93,6 +93,11 @@ function formatHour(isoTime) {
   return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 }
 
+function formatDayMonth(isoTime) {
+  const d = new Date(isoTime);
+  return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+}
+
 const COMPASS_POINTS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 function compassLabel(deg) {
   return COMPASS_POINTS[Math.round(deg / 45) % 8];
@@ -111,9 +116,9 @@ const CHART = {
   width: 760,
   padLeft: 34, // room for the temperature axis (ticks + "16°" labels)
   padRight: 38, // room for the precip-probability axis (ticks + "100%" labels)
-  topStripHeight: 30, // fixed-height strip at the top: condition icons, then a single size-scaled wind arrow below
+  topStripHeight: 44, // date, then hour labels, then the wind arrow row below
   plotHeight: 170, // main temp line + precip wash area
-  axisLabelHeight: 24, // bottom strip for hour labels only
+  axisLabelHeight: 6, // just breathing room -- nothing fixed sits at the bottom now
 };
 
 // "Nice" round-number ticks (steps of 1/2/5/10) rather than ticks derived
@@ -228,17 +233,35 @@ function renderTodayChart(data) {
     })
     .join("");
 
-  // Hour labels: every hour, along the bottom -- just the time axis now,
-  // wind moved up to share the top strip with the condition icons.
+  // Hour labels: moved to the top, matching the usual chart convention
+  // (time axis reads top-to-bottom-then-across, not buried at the bottom).
+  // Date shown once on its own line above -- the chart only ever spans a
+  // single calendar day, and prefixing it onto the first hour label
+  // collided with the next one (the date string is wider than the gap
+  // between hourly ticks).
+  const dateLabel = precipPoints.length
+    ? `<text x="${padLeft}" y="10" class="chart-axis-label" text-anchor="start">${formatDayMonth(precipPoints[0].time)}</text>`
+    : "";
   const hourLabels = precipPoints
-    .map((p) => `<text x="${p.x.toFixed(1)}" y="${(plotTop + plotHeight + 18).toFixed(1)}" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
+    .map((p) => `<text x="${p.x.toFixed(1)}" y="22" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
     .join("");
 
-  // Icons ride the temperature line (Yr-style) rather than sitting in the
-  // fixed top strip -- trying this again now that wind is a single compact
-  // glyph rather than two stacked rows. Clamped to a minimum y so a point
-  // near the top of the range can't push its icon off-screen.
+  // Icons ride the temperature line (Yr-style). Thinned rather than shown
+  // at every 15-min point -- real changes always register immediately,
+  // but an unchanging stretch only refreshes at most every 30 minutes
+  // (2 points), so a long steady overcast spell doesn't repeat the same
+  // icon 60+ times in a row.
+  let lastIconCode = null;
+  let lastIconIndex = -Infinity;
   const conditionIcons = points
+    .filter((p, i) => {
+      const show = i === 0 || p.code !== lastIconCode || i - lastIconIndex >= 2;
+      if (show) {
+        lastIconCode = p.code;
+        lastIconIndex = i;
+      }
+      return show;
+    })
     .map((p) => {
       const icon = describeCode(p.code)[1];
       const y = Math.max(p.yTemp - 12, 10);
@@ -263,7 +286,7 @@ function renderTodayChart(data) {
       const fraction = Math.min(p.windSpeed / WIND_REFERENCE_SPEED, 1);
       const size = WIND_ARROW_MIN_PX + fraction * (WIND_ARROW_MAX_PX - WIND_ARROW_MIN_PX);
       const opacity = (0.45 + fraction * 0.55).toFixed(2);
-      return `<text x="${p.x.toFixed(1)}" y="26" font-size="${size.toFixed(1)}" fill-opacity="${opacity}" class="chart-wind-arrow" text-anchor="middle" transform="rotate(${rotation.toFixed(0)}, ${p.x.toFixed(1)}, 22)">&uarr;<title>${Math.round(p.windSpeed)}km/h from ${compassLabel(p.windDir)}</title></text>`;
+      return `<text x="${p.x.toFixed(1)}" y="40" font-size="${size.toFixed(1)}" fill-opacity="${opacity}" class="chart-wind-arrow" text-anchor="middle" transform="rotate(${rotation.toFixed(0)}, ${p.x.toFixed(1)}, 36)">&uarr;<title>${Math.round(p.windSpeed)}km/h from ${compassLabel(p.windDir)}</title></text>`;
     })
     .join("");
 
@@ -298,6 +321,7 @@ function renderTodayChart(data) {
       <polyline points="${linePath}" class="chart-line" fill="none" />
       ${conditionIcons}
       ${windRow}
+      ${dateLabel}
       ${hourLabels}
       ${tempAxis}
       ${precipAxis}

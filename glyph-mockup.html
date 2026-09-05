@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>weather-interrogator — hero glyph mockup</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #2a2e37;
+    --text: #e7e9ee;
+    --muted: #8b93a3;
+    --temp: #ffb454;
+    --precip: #0a84ff;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    padding: 2rem;
+  }
+
+  h1 { font-size: 1.3rem; margin-bottom: 0.3rem; }
+  p.intro { color: var(--muted); max-width: 60ch; margin-bottom: 2rem; line-height: 1.5; }
+
+  .variant-block { margin-bottom: 3rem; }
+  .variant-block h2 { font-size: 1.05rem; margin-bottom: 0.2rem; }
+  .variant-block .variant-note { color: var(--muted); max-width: 65ch; line-height: 1.5; margin-bottom: 1.2rem; font-size: 0.92rem; }
+
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem;
+    width: 250px;
+    text-align: center;
+  }
+
+  .card .caption {
+    margin-top: 0.6rem;
+    font-size: 0.82rem;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+
+  .legend {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.2rem 1.5rem;
+    max-width: 70ch;
+    font-size: 0.88rem;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .legend strong { color: var(--text); }
+  .legend code { color: var(--text); background: var(--bg); padding: 0.1rem 0.3rem; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Hero glyph — option comparison</h1>
+<p class="intro">
+  Four fixed scenarios, dummy data, rendered two ways for the wind treatment. Sky/cloud/rain layering,
+  temperature placement (top-left, anchored to the sun/moon) and rain-intensity streaks are the same
+  across both — the only thing being compared is how wind gets drawn.
+</p>
+
+<div id="app"></div>
+
+<script>
+const SCENARIOS = [
+  { label: "Sunny & warm, calm",            isDay: true,  cloudPct: 5,  tempC: 24, windKmh: 6,  windDirDeg: 200, precipMm15: 0 },
+  { label: "Partly cloudy, light rain, breezy", isDay: true,  cloudPct: 45, tempC: 15, windKmh: 22, windDirDeg: 250, precipMm15: 0.4 },
+  { label: "Overcast, heavy rain, strong wind", isDay: true,  cloudPct: 95, tempC: 11, windKmh: 55, windDirDeg: 280, precipMm15: 2.2 },
+  { label: "Clear night, calm, cold",        isDay: false, cloudPct: 10, tempC: 3,  windKmh: 3,  windDirDeg: 0,   precipMm15: 0 },
+];
+
+// Approx Beaufort-derived buckets (km/h) -- same rough idea as the app's
+// existing per-15-min chart arrow, just bucketed here instead of continuous.
+function windBucket(kmh) {
+  if (kmh < 6) return { name: "calm", stroke: 1.2, len: 10 };
+  if (kmh < 20) return { name: "light", stroke: 2, len: 16 };
+  if (kmh < 39) return { name: "moderate", stroke: 3.2, len: 20 };
+  if (kmh < 62) return { name: "strong", stroke: 5, len: 24 };
+  return { name: "gale", stroke: 7, len: 28 };
+}
+
+// mm per 15 min -- roughly hourly light/moderate/heavy (2.5 / 7.6 mm/hr) divided by 4
+function rainBucket(mm15) {
+  if (mm15 <= 0) return { name: "none", count: 0 };
+  if (mm15 < 0.6) return { name: "light", count: 3 };
+  if (mm15 < 1.9) return { name: "moderate", count: 6 };
+  return { name: "heavy", count: 10 };
+}
+
+function cloudGeometry(pct) {
+  // scale + opacity both grow with cover; a light wisp at 10% shouldn't
+  // fully hide the sun, a 90%+ cover should.
+  const scale = 0.5 + (pct / 100) * 0.9;
+  const opacity = 0.25 + (pct / 100) * 0.7;
+  return { scale, opacity };
+}
+
+function cloudShape(cx, cy, scale, opacity) {
+  // classic "cluster of circles" cloud silhouette
+  const r = 14 * scale;
+  return `
+    <g opacity="${opacity.toFixed(2)}" fill="#c7ccd6">
+      <ellipse cx="${cx}" cy="${cy + r * 0.3}" rx="${r * 1.6}" ry="${r * 0.9}" />
+      <circle cx="${cx - r * 0.9}" cy="${cy}" r="${r * 0.85}" />
+      <circle cx="${cx + r * 0.2}" cy="${cy - r * 0.4}" r="${r}" />
+      <circle cx="${cx + r * 1.1}" cy="${cy + r * 0.1}" r="${r * 0.75}" />
+    </g>
+  `;
+}
+
+function rainStreaks(cx, cy, bucket) {
+  if (bucket.count === 0) return "";
+  let out = "";
+  for (let i = 0; i < bucket.count; i++) {
+    const x = cx - 26 + (i / (bucket.count - 1 || 1)) * 52 + (Math.random() - 0.5) * 4;
+    const y0 = cy + 6;
+    const len = bucket.name === "heavy" ? 14 : bucket.name === "moderate" ? 10 : 7;
+    const width = bucket.name === "heavy" ? 2.2 : bucket.name === "moderate" ? 1.6 : 1.1;
+    const opacity = bucket.name === "heavy" ? 0.9 : bucket.name === "moderate" ? 0.75 : 0.55;
+    out += `<line x1="${x}" y1="${y0}" x2="${x - 4}" y2="${y0 + len}" stroke="var(--precip)" stroke-width="${width}" stroke-linecap="round" opacity="${opacity}" />`;
+  }
+  return out;
+}
+
+function skyPuck(isDay) {
+  const grad = isDay
+    ? `<linearGradient id="sky-day" x1="0" y1="0" x2="0" y2="1">
+         <stop offset="0%" stop-color="#4a90d9" />
+         <stop offset="100%" stop-color="#8ec9ec" />
+       </linearGradient>`
+    : `<linearGradient id="sky-night" x1="0" y1="0" x2="0" y2="1">
+         <stop offset="0%" stop-color="#0b1026" />
+         <stop offset="100%" stop-color="#1c2440" />
+       </linearGradient>`;
+  return { grad, fill: isDay ? "url(#sky-day)" : "url(#sky-night)" };
+}
+
+function sunOrMoon(isDay, cx, cy) {
+  if (isDay) {
+    let rays = "";
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const x1 = cx + Math.cos(a) * 15, y1 = cy + Math.sin(a) * 15;
+      const x2 = cx + Math.cos(a) * 20, y2 = cy + Math.sin(a) * 20;
+      rays += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#ffcc33" stroke-width="2" stroke-linecap="round" />`;
+    }
+    return `<g>${rays}<circle cx="${cx}" cy="${cy}" r="12" fill="#ffcc33" /></g>`;
+  }
+  return `<circle cx="${cx}" cy="${cy}" r="11" fill="#d8dee8" />`;
+}
+
+// Variant A: wind drawn on the puck's perimeter, direction = arrow angle,
+// speed = bucketed stroke thickness/length, exact value as a number at the tail.
+// Convention: arrow points where the wind is BLOWING TO (windDirDeg passed in
+// is already flipped from the meteorological "from" bearing, same as the
+// existing chart arrow does before rendering).
+function windVariantA(bucket, windDirDeg, windKmh, R, cx, cy) {
+  if (bucket.name === "calm") {
+    return `<circle cx="${cx}" cy="${cy - R}" r="2" fill="var(--muted)" /><text x="${cx}" y="${cy - R - 8}" font-size="10" fill="var(--muted)" text-anchor="middle">calm</text>`;
+  }
+  const rad = (windDirDeg * Math.PI) / 180;
+  const tailR = R + 4, headR = R + 4 + bucket.len;
+  const x1 = cx + Math.sin(rad) * tailR, y1 = cy - Math.cos(rad) * tailR;
+  const x2 = cx + Math.sin(rad) * headR, y2 = cy - Math.cos(rad) * headR;
+  const labelR = headR + 10;
+  const lx = cx + Math.sin(rad) * labelR, ly = cy - Math.cos(rad) * labelR;
+  return `
+    <g stroke="var(--text)" fill="var(--text)">
+      <line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke-width="${bucket.stroke}" stroke-linecap="round"
+            marker-end="url(#arrowhead)" />
+    </g>
+    <text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" font-size="10" fill="var(--muted)" text-anchor="middle">${Math.round(windKmh)}</text>
+  `;
+}
+
+// Variant B: same single-glyph convention already shipped on the app's
+// per-15-min chart -- rotation for direction, continuous size for speed,
+// no separate number (exact value lives in a hover title only).
+function windVariantB(windDirDeg, windKmh, cx, cy) {
+  const size = 14 + Math.min(windKmh, 60) / 60 * 20; // 14-34px
+  return `
+    <text x="${cx}" y="${cy}" font-size="${size.toFixed(1)}" fill="var(--text)" text-anchor="middle"
+          transform="rotate(${windDirDeg.toFixed(0)}, ${cx}, ${cy})">&uarr;<title>${Math.round(windKmh)} km/h</title></text>
+  `;
+}
+
+function glyphSVG(s, variant) {
+  // size is bigger than the puck (2*R) needs on its own -- Option A's
+  // strong/gale arrows plus their tail-end number can extend past R+40,
+  // so the canvas needs that much margin around the puck or the label
+  // clips off the edge for the higher wind-speed scenarios.
+  const R = 46, cx = 105, cy = 105, size = 210;
+  const sky = skyPuck(s.isDay);
+  const cloud = cloudGeometry(s.cloudPct);
+  const rain = rainBucket(s.precipMm15);
+  const wind = windBucket(s.windKmh);
+  const sunCx = cx - 14, sunCy = cy - 14;
+
+  const windMark = variant === "A"
+    ? windVariantA(wind, s.windDirDeg, s.windKmh, R, cx, cy)
+    : windVariantB(s.windDirDeg, s.windKmh, cx + R - 4, cy - R + 4);
+
+  return `
+  <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+    <defs>
+      ${sky.grad}
+      <marker id="arrowhead" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 Z" fill="var(--text)" />
+      </marker>
+      <clipPath id="puck-clip"><circle cx="${cx}" cy="${cy}" r="${R}" /></clipPath>
+    </defs>
+
+    <circle cx="${cx}" cy="${cy}" r="${R}" fill="${sky.fill}" />
+
+    <g clip-path="url(#puck-clip)">
+      ${sunOrMoon(s.isDay, sunCx, sunCy)}
+      ${cloudShape(cx, cy - 6, cloud.scale, cloud.opacity)}
+      ${rainStreaks(cx, cy + 6, rain)}
+    </g>
+
+    <circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="var(--border)" stroke-width="1.5" />
+
+    <text x="${sunCx - 2}" y="${sunCy - 20}" font-size="17" font-weight="600" fill="var(--temp)"
+          stroke="var(--bg)" stroke-width="3" paint-order="stroke" text-anchor="middle">${Math.round(s.tempC)}&deg;</text>
+
+    ${windMark}
+  </svg>`;
+}
+
+const app = document.getElementById("app");
+
+function block(title, note, variant) {
+  const cards = SCENARIOS.map((s) => `
+    <div class="card">
+      ${glyphSVG(s, variant)}
+      <div class="caption">${s.label}<br>${Math.round(s.windKmh)} km/h @ ${s.windDirDeg}&deg;</div>
+    </div>
+  `).join("");
+  return `
+    <div class="variant-block">
+      <h2>${title}</h2>
+      <p class="variant-note">${note}</p>
+      <div class="row">${cards}</div>
+    </div>
+  `;
+}
+
+app.innerHTML =
+  block(
+    "Option A — perimeter arrow + number",
+    "Wind drawn just outside the circle: angle is exact (continuous), thickness/length bucketed into five Beaufort-ish categories, exact km/h printed near the tail. More explicit, costs a bit more visual weight.",
+    "A"
+  ) +
+  block(
+    "Option B — single glyph (matches the existing chart)",
+    "Same convention already shipped on the per-15-min wind row: one rotated arrow, continuous size for speed, no separate number (exact value in a hover title only). Consistent with the rest of the app, but you lose the number at a glance.",
+    "B"
+  ) +
+  `<div class="legend">
+    <strong>What's fixed across both options:</strong> sky puck (day/night gradient), sun or moon anchored top-left,
+    cloud silhouette scaled + faded in continuously from <code>cloudPct</code> (not five hand-picked states),
+    rain streaks bucketed light/moderate/heavy from <code>precipMm15</code>, temperature as a stroked numeral
+    pinned to the sun/moon's corner so it stays legible over sky or cloud.<br><br>
+    <strong>Not decided yet:</strong> precipitation probability isn't shown at all here — this repo deliberately
+    dropped that field (see README) since Open-Meteo's only probability source for Edinburgh was a mismatched
+    ~27km ensemble, not genuinely local. If/when a locally-coherent probability figure exists, it'd be a
+    separate small numeral, not a visual property (see prior discussion on why probability and intensity are
+    different quantities).
+  </div>`;
+</script>
+
+</body>
+</html>
