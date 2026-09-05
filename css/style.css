@@ -288,6 +288,7 @@ main {
 .ask-form {
   display: flex;
   gap: 0.5rem;
+  margin-top: 0.75rem;
 }
 
 .ask-form input {
