@@ -603,20 +603,29 @@ function setupAsk() {
     try {
       const session = await ensureChatSession();
 
-      let answer;
       if (!askedBefore) {
         const data = latestData ?? (await forecastPromise);
-        answer = await runStagedAsk(session, question, data);
+        const answer = await runStagedAsk(session, question, data);
         askedBefore = true;
+        logEntry("answer", answer);
+        // The box above is reusable for follow-ups -- nothing else in the
+        // UI signals that, so said explicitly once, right when it first
+        // becomes relevant.
+        logEntry("status", "You can ask a follow-up in the box above — it'll answer directly using what it already knows, no need to repeat context.");
       } else {
         logEntry("status", "Answering…");
-        answer = await session.prompt(question);
+        const answer = await session.prompt(question);
+        logEntry("answer", answer);
       }
-      logEntry("answer", answer);
     } catch (err) {
       logEntry("error", `Error: ${err.message}`);
     } finally {
       submitBtn.disabled = !promptOk;
+      // The same box handles follow-ups -- nothing else changes shape after
+      // an answer, so without this it looks like there's no way to continue
+      // the conversation. Placeholder + refocus make that visible.
+      input.placeholder = askedBefore ? "Ask a follow-up…" : "e.g. Is it worth a BBQ this weekend?";
+      input.focus();
     }
   });
 }
