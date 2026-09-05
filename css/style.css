@@ -100,13 +100,10 @@ main {
 
 .chart-wind-arrow {
   fill: var(--accent);
-  font-size: 9px;
   font-weight: 700;
-}
-
-.chart-wind-speed {
-  fill: var(--muted);
-  font-size: 8px;
+  /* font-size and fill-opacity are set per-point inline (scaled by
+     speed) -- deliberately not set here, a class rule would override
+     the inline presentation attribute since CSS beats it in the cascade. */
 }
 
 .axis-tick { stroke: var(--border); stroke-width: 1; }
