@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>weather-interrogator — icons as the temperature graph</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #2a2e37;
+    --text: #e7e9ee;
+    --muted: #8b93a3;
+    --temp: #ffb454;
+    --precip: #0a84ff;
+    --grid: #22262f;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    padding: 2rem;
+  }
+
+  h1 { font-size: 1.3rem; margin-bottom: 0.3rem; }
+  p.intro { color: var(--muted); max-width: 66ch; margin-bottom: 1.5rem; line-height: 1.5; }
+
+  .controls {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 1.2rem;
+    font-size: 0.9rem;
+    color: var(--muted);
+  }
+  .controls label { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.2rem;
+    max-width: 840px;
+    overflow-x: auto;
+  }
+
+  .note { color: var(--muted); font-size: 0.85rem; margin-top: 1rem; max-width: 66ch; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<h1>Same-size icons as the graph, no line required</h1>
+<p class="intro">
+  24 hourly points, dummy data. Every glyph is drawn at the exact same size regardless of its data (unlike
+  the wind arrow, which deliberately scales) — only its vertical position encodes temperature. The claim
+  being tested: a row of fixed-size icons placed at the right height traces the curve on its own.
+</p>
+
+<div class="controls">
+  <label><input type="checkbox" id="toggle-line"> connect with a line (for comparison)</label>
+  <label><input type="checkbox" id="toggle-numeral"> show temp numeral in each glyph</label>
+</div>
+
+<div class="panel">
+  <div id="chart"></div>
+</div>
+
+<p class="note">
+  Cloud/rain state is a dummy pattern (clear early, cloud building into a mid-afternoon shower, clearing by
+  evening) using the same continuous cloud-cover-driven silhouette and bucketed rain streaks from the
+  earlier glyph mockup — not extracted from any icon set, hand-drawn.
+</p>
+
+<script>
+// ---- dummy 24h data --------------------------------------------------
+const HOURS = Array.from({ length: 24 }, (_, h) => h);
+
+function tempAt(h) {
+  // peaks ~19C at 15:00, trough ~7C in the early hours -- illustrative only
+  return 13 + 6 * Math.cos((2 * Math.PI / 24) * (h - 15));
+}
+function cloudPctAt(h) {
+  return Math.max(5, Math.min(90, 85 - Math.abs(h - 14) * 8));
+}
+function precipMm15At(h) {
+  const c = cloudPctAt(h);
+  if (c > 75) return 1.2;
+  if (c > 65) return 0.4;
+  return 0;
+}
+
+const DATA = HOURS.map((h) => ({
+  hour: h,
+  tempC: tempAt(h),
+  cloudPct: cloudPctAt(h),
+  precipMm15: precipMm15At(h),
+  isDay: h >= 6 && h < 20,
+}));
+
+// ---- reusable glyph pieces (same hand-drawn shapes as the earlier mockups) --
+function cloudGeometry(pct) {
+  const scale = 0.5 + (pct / 100) * 0.9;
+  const opacity = 0.25 + (pct / 100) * 0.7;
+  return { scale, opacity };
+}
+function cloudShape(cx, cy, scale, opacity) {
+  const r = 7 * scale;
+  return `
+    <g opacity="${opacity.toFixed(2)}" fill="#c7ccd6">
+      <ellipse cx="${cx}" cy="${cy + r * 0.3}" rx="${r * 1.6}" ry="${r * 0.9}" />
+      <circle cx="${cx - r * 0.9}" cy="${cy}" r="${r * 0.85}" />
+      <circle cx="${cx + r * 0.2}" cy="${cy - r * 0.4}" r="${r}" />
+      <circle cx="${cx + r * 1.1}" cy="${cy + r * 0.1}" r="${r * 0.75}" />
+    </g>
+  `;
+}
+function rainBucket(mm15) {
+  if (mm15 <= 0) return { name: "none", count: 0 };
+  if (mm15 < 0.6) return { name: "light", count: 2 };
+  if (mm15 < 1.9) return { name: "moderate", count: 3 };
+  return { name: "heavy", count: 4 };
+}
+function rainStreaks(cx, cy, bucket) {
+  if (bucket.count === 0) return "";
+  let out = "";
+  for (let i = 0; i < bucket.count; i++) {
+    const x = cx - 5 + (i / (bucket.count - 1 || 1)) * 10;
+    out += `<line x1="${x.toFixed(1)}" y1="${cy + 3}" x2="${(x - 1.5).toFixed(1)}" y2="${cy + 8}" stroke="var(--precip)" stroke-width="1.1" stroke-linecap="round" opacity="0.8" />`;
+  }
+  return out;
+}
+function sunOrMoon(isDay, cx, cy) {
+  if (isDay) {
+    let rays = "";
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const x1 = cx + Math.cos(a) * 6, y1 = cy + Math.sin(a) * 6;
+      const x2 = cx + Math.cos(a) * 8.5, y2 = cy + Math.sin(a) * 8.5;
+      rays += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#ffcc33" stroke-width="1.2" stroke-linecap="round" />`;
+    }
+    return `<g>${rays}<circle cx="${cx}" cy="${cy}" r="5" fill="#ffcc33" /></g>`;
+  }
+  return `<circle cx="${cx}" cy="${cy}" r="4.5" fill="#d8dee8" />`;
+}
+
+// Fixed footprint for every glyph -- this is the whole point being tested:
+// R never changes with temp/wind/anything else, only (x, y) does.
+const R = 15;
+
+function glyph(x, y, d, showNumeral) {
+  const cloud = cloudGeometry(d.cloudPct);
+  const rain = rainBucket(d.precipMm15);
+  return `
+    <g transform="translate(${x.toFixed(1)}, ${y.toFixed(1)})">
+      <circle r="${R}" fill="${d.isDay ? "#4a90d9" : "#131a33"}" />
+      <g clip-path="url(#glyph-clip)">
+        ${sunOrMoon(d.isDay, -4, -4)}
+        ${cloudShape(0, -1, cloud.scale, cloud.opacity)}
+        ${rainStreaks(0, 2, rain)}
+      </g>
+      <circle r="${R}" fill="none" stroke="var(--border)" stroke-width="1" />
+      ${showNumeral ? `<text y="${R + 11}" font-size="9" fill="var(--temp)" text-anchor="middle">${Math.round(d.tempC)}&deg;</text>` : ""}
+    </g>
+  `;
+}
+
+// ---- layout: x = hour, y = temperature (no other encoding) -------------
+const PLOT = { left: 40, right: 20, top: 24, bottom: 34, width: 800, height: 220 };
+const plotW = PLOT.width - PLOT.left - PLOT.right;
+const plotTop = PLOT.top + R + 14; // headroom for a numeral above/below without clipping
+const plotBottom = PLOT.height - PLOT.bottom - R;
+
+const temps = DATA.map((d) => d.tempC);
+const rawMin = Math.min(...temps), rawMax = Math.max(...temps);
+const axisMin = Math.floor(rawMin / 5) * 5;
+const axisMax = Math.ceil(rawMax / 5) * 5;
+
+function xFor(hour) { return PLOT.left + (hour / 23) * plotW; }
+function yFor(temp) {
+  const t = (temp - axisMin) / (axisMax - axisMin || 1);
+  return plotBottom - t * (plotBottom - plotTop);
+}
+
+function ticks() {
+  const out = [];
+  for (let v = axisMin; v <= axisMax; v += 5) out.push(v);
+  return out;
+}
+
+function render() {
+  const showLine = document.getElementById("toggle-line").checked;
+  const showNumeral = document.getElementById("toggle-numeral").checked;
+
+  const gridLines = ticks().map((v) => {
+    const y = yFor(v);
+    return `
+      <line x1="${PLOT.left}" y1="${y.toFixed(1)}" x2="${PLOT.width - PLOT.right}" y2="${y.toFixed(1)}" stroke="var(--grid)" stroke-width="1" />
+      <text x="${PLOT.left - 8}" y="${(y + 3).toFixed(1)}" font-size="10" fill="var(--muted)" text-anchor="end">${v}&deg;</text>
+    `;
+  }).join("");
+
+  const hourLabels = [0, 3, 6, 9, 12, 15, 18, 21].map((h) => {
+    const x = xFor(h);
+    return `<text x="${x.toFixed(1)}" y="${PLOT.height - 10}" font-size="10" fill="var(--muted)" text-anchor="middle">${String(h).padStart(2, "0")}:00</text>`;
+  }).join("");
+
+  const points = DATA.map((d) => ({ x: xFor(d.hour), y: yFor(d.tempC), d }));
+
+  const line = showLine
+    ? `<polyline points="${points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")}" fill="none" stroke="var(--temp)" stroke-width="1.5" opacity="0.7" />`
+    : "";
+
+  const glyphs = points.map((p) => glyph(p.x, p.y, p.d, showNumeral)).join("");
+
+  document.getElementById("chart").innerHTML = `
+    <svg viewBox="0 0 ${PLOT.width} ${PLOT.height}" width="${PLOT.width}" height="${PLOT.height}">
+      <defs><clipPath id="glyph-clip"><circle r="${R}" /></clipPath></defs>
+      ${gridLines}
+      ${hourLabels}
+      ${line}
+      ${glyphs}
+    </svg>
+  `;
+}
+
+document.getElementById("toggle-line").addEventListener("change", render);
+document.getElementById("toggle-numeral").addEventListener("change", render);
+render();
+</script>
+
+</body>
+</html>

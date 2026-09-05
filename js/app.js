@@ -116,9 +116,9 @@ const CHART = {
   width: 760,
   padLeft: 34, // room for the temperature axis (ticks + "16°" labels)
   padRight: 38, // room for the precip-probability axis (ticks + "100%" labels)
-  topStripHeight: 44, // date, then hour labels, then the wind arrow row below
+  topStripHeight: 30, // date, then hour labels
   plotHeight: 170, // main temp line + precip wash area
-  axisLabelHeight: 6, // just breathing room -- nothing fixed sits at the bottom now
+  axisLabelHeight: 30, // wind arrow + speed row at the bottom
 };
 
 // "Nice" round-number ticks (steps of 1/2/5/10) rather than ticks derived
@@ -246,22 +246,9 @@ function renderTodayChart(data) {
     .map((p) => `<text x="${p.x.toFixed(1)}" y="22" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
     .join("");
 
-  // Icons ride the temperature line (Yr-style). Thinned rather than shown
-  // at every 15-min point -- real changes always register immediately,
-  // but an unchanging stretch only refreshes at most every 30 minutes
-  // (2 points), so a long steady overcast spell doesn't repeat the same
-  // icon 60+ times in a row.
-  let lastIconCode = null;
-  let lastIconIndex = -Infinity;
+  // Icons ride the temperature line (Yr-style), one per 15-min point --
+  // back to full resolution after trying the thinned version.
   const conditionIcons = points
-    .filter((p, i) => {
-      const show = i === 0 || p.code !== lastIconCode || i - lastIconIndex >= 2;
-      if (show) {
-        lastIconCode = p.code;
-        lastIconIndex = i;
-      }
-      return show;
-    })
     .map((p) => {
       const icon = describeCode(p.code)[1];
       const y = Math.max(p.yTemp - 12, 10);
@@ -269,24 +256,20 @@ function renderTodayChart(data) {
     })
     .join("");
 
-  // Wind row: a single arrow per 15-min point encodes both facts at once --
-  // rotation shows direction, size shows speed (bigger = stronger) -- the
-  // standard wind-vector convention, rather than a separate arrow+number
-  // pair where it's unclear at a glance which glyph the number belongs to.
-  // Exact value is still one hover away, same pattern as everything else
-  // on this chart. Arrow points in the direction wind is blowing *toward*
-  // (direction+180, since wind_direction_10m is meteorological convention
-  // -- the direction it's blowing *from*).
-  const WIND_ARROW_MIN_PX = 8;
-  const WIND_ARROW_MAX_PX = 17;
-  const WIND_REFERENCE_SPEED = 50; // km/h -- reaches max size here, a properly blustery Edinburgh day
+  // Wind row: arrow (direction) + speed number, back at the bottom -- after
+  // trying a single size-scaled glyph, the explicit number reads clearer.
+  // Arrow points in the direction wind is blowing *toward* (direction+180,
+  // since wind_direction_10m is meteorological convention -- the direction
+  // it's blowing *from*).
   const windRow = points
     .map((p) => {
       const rotation = (p.windDir + 180) % 360;
-      const fraction = Math.min(p.windSpeed / WIND_REFERENCE_SPEED, 1);
-      const size = WIND_ARROW_MIN_PX + fraction * (WIND_ARROW_MAX_PX - WIND_ARROW_MIN_PX);
-      const opacity = (0.45 + fraction * 0.55).toFixed(2);
-      return `<text x="${p.x.toFixed(1)}" y="40" font-size="${size.toFixed(1)}" fill-opacity="${opacity}" class="chart-wind-arrow" text-anchor="middle" transform="rotate(${rotation.toFixed(0)}, ${p.x.toFixed(1)}, 36)">&uarr;<title>${Math.round(p.windSpeed)}km/h from ${compassLabel(p.windDir)}</title></text>`;
+      const y1 = plotTop + plotHeight + 12;
+      const y2 = plotTop + plotHeight + 24;
+      return (
+        `<text x="${p.x.toFixed(1)}" y="${y1.toFixed(1)}" class="chart-wind-arrow" text-anchor="middle" transform="rotate(${rotation.toFixed(0)}, ${p.x.toFixed(1)}, ${(y1 - 3).toFixed(1)})">&uarr;</text>` +
+        `<text x="${p.x.toFixed(1)}" y="${y2.toFixed(1)}" class="chart-wind-speed" text-anchor="middle">${Math.round(p.windSpeed)}</text>`
+      );
     })
     .join("");
 
