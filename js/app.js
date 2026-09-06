@@ -12,6 +12,12 @@ FORECAST_URL.search = new URLSearchParams({
   longitude: EDINBURGH.longitude,
   timezone: "Europe/London",
   forecast_days: "2",
+  // Extends minutely_15/hourly backward by a full day at the same
+  // resolution as the forward data (confirmed: still genuinely 15-min
+  // throughout, not a downgraded or repeated series) -- used for the
+  // recent-past trailing context on the chart, a few hours of it, not the
+  // whole day.
+  past_days: "1",
   models: "ukmo_uk_deterministic_2km",
   // UK convention for wind speed (Met Office forecasts, broadcast weather)
   // is mph, not km/h -- converted server-side rather than client-side math,
@@ -34,6 +40,12 @@ FORECAST_URL.search = new URLSearchParams({
   // calculation, not model-native cadence, so it's genuinely this precise
   // rather than a repeated hourly value.
   minutely_15: "temperature_2m,apparent_temperature,precipitation,wind_speed_10m,wind_direction_10m,weathercode,is_day",
+  // Daily summary: UKV only has real (non-null) data 2 days out (confirmed
+  // -- days 3+ came back null when tried), so this covers today/tomorrow
+  // only, not a fabricated week. Deliberately not mixing in a
+  // lower-resolution global model to fake more days -- that's the same
+  // resolution-mismatch mistake precipitation_probability was dropped over.
+  daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum",
 });
 
 // Below this gap, actual and feels-like are close enough that showing both
@@ -143,7 +155,8 @@ const CHART = {
   windAxisOffset: 40, // how far right of the precip axis the wind axis lane sits
 };
 
-const CONTEXT_HOURS = 12; // both the chart and the model's data window -- fixed forward-looking span rather than "rest of today", so it behaves the same at 8am and at 11pm
+const CONTEXT_HOURS = 12; // the model's data window (Ask/LLM) AND the chart's forward span -- fixed forward-looking span rather than "rest of today", so it behaves the same at 8am and at 11pm. Deliberately forward-only for Ask, per the recent-past scoping note: that's a later addition, not this one.
+const PAST_HOURS = 3; // chart-only: recent-past trailing context, shorter than the forward span so it reads as context for "now" rather than a second co-equal window
 
 function nextHoursIndices(times, now, hours) {
   const cutoff = new Date(now.getTime() + hours * 3600 * 1000);
@@ -155,13 +168,30 @@ function nextHoursIndices(times, now, hours) {
   return idxs;
 }
 
+// Chart-only (see PAST_HOURS above) -- symmetric version of nextHoursIndices
+// that also looks backward. Kept separate from nextHoursIndices rather than
+// adding a pastHours param to it, so the Ask/LLM lookup path (which uses
+// nextHoursIndices directly) can't accidentally start seeing past data it
+// was never scoped to handle.
+function windowIndices(times, now, pastHours, futureHours) {
+  const start = new Date(now.getTime() - pastHours * 3600 * 1000);
+  const cutoff = new Date(now.getTime() + futureHours * 3600 * 1000);
+  const idxs = [];
+  times.forEach((t, i) => {
+    const ts = new Date(t);
+    if (ts >= start && ts < cutoff) idxs.push(i);
+  });
+  return idxs;
+}
+
 function renderTodayChart(data) {
   const wrap = document.getElementById("today-chart");
   const now = new Date(data.current.time);
-  const spanMs = CONTEXT_HOURS * 3600 * 1000;
+  const windowStart = new Date(now.getTime() - PAST_HOURS * 3600 * 1000);
+  const spanMs = (PAST_HOURS + CONTEXT_HOURS) * 3600 * 1000;
 
-  const tempIdxs = nextHoursIndices(data.minutely_15.time, now, CONTEXT_HOURS);
-  const precipIdxs = nextHoursIndices(data.hourly.time, now, CONTEXT_HOURS);
+  const tempIdxs = windowIndices(data.minutely_15.time, now, PAST_HOURS, CONTEXT_HOURS);
+  const precipIdxs = windowIndices(data.hourly.time, now, PAST_HOURS, CONTEXT_HOURS);
 
   if (tempIdxs.length < 2) {
     wrap.innerHTML = `<p class="chart-empty">Not enough forecast data to chart the next ${CONTEXT_HOURS} hours.</p>`;
@@ -189,7 +219,10 @@ function renderTodayChart(data) {
   // resolutions, so they're placed on one shared axis by actual elapsed
   // time rather than by array index -- that's what keeps a 14:15 point on
   // the line lining up under the right third of the 14:00-15:00 bar.
-  const xForTime = (t) => padLeft + ((t - now) / spanMs) * plotWidth;
+  // Offset from windowStart (not now) since the window now extends
+  // PAST_HOURS behind "now" as well as CONTEXT_HOURS ahead of it.
+  const xForTime = (t) => padLeft + ((t - windowStart) / spanMs) * plotWidth;
+  const nowX = xForTime(now);
 
   // precipitation (mm) at 15-min resolution also describes the *preceding*
   // interval (confirmed against the docs, same convention as the hourly
@@ -197,26 +230,30 @@ function renderTodayChart(data) {
   // the one actually in force during this bar's slot, not index idx.
   const mmAt = (idx) => data.minutely_15.precipitation[idx + 1] ?? 0;
 
-  const points = tempIdxs.map((idx) => ({
-    idx,
-    x: xForTime(new Date(data.minutely_15.time[idx])),
-    yTemp: iconY(data.minutely_15.temperature_2m[idx]),
-    temp: data.minutely_15.temperature_2m[idx],
-    apparentTemp: data.minutely_15.apparent_temperature[idx],
-    time: data.minutely_15.time[idx],
-    mm: mmAt(idx),
-    windSpeed: data.minutely_15.wind_speed_10m[idx], // mph, see wind_speed_unit in the fetch config
-    yWind: iconY(data.minutely_15.wind_speed_10m[idx]),
-    windDir: data.minutely_15.wind_direction_10m[idx],
-    code: data.minutely_15.weathercode[idx],
-  }));
+  const points = tempIdxs.map((idx) => {
+    const time = data.minutely_15.time[idx];
+    return {
+      idx,
+      x: xForTime(new Date(time)),
+      yTemp: iconY(data.minutely_15.temperature_2m[idx]),
+      temp: data.minutely_15.temperature_2m[idx],
+      apparentTemp: data.minutely_15.apparent_temperature[idx],
+      time,
+      isPast: new Date(time) < now, // recent-past trailing context -- rendered de-emphasised, not mistaken for more forecast
+      mm: mmAt(idx),
+      windSpeed: data.minutely_15.wind_speed_10m[idx], // mph, see wind_speed_unit in the fetch config
+      yWind: iconY(data.minutely_15.wind_speed_10m[idx]),
+      windDir: data.minutely_15.wind_direction_10m[idx],
+      code: data.minutely_15.weathercode[idx],
+    };
+  });
 
   // Hour-mark positions for the bottom axis labels -- just time/x, no
   // probability attached (that field is gone; see the fetch config note).
-  const precipPoints = precipIdxs.map((idx) => ({
-    x: xForTime(new Date(data.hourly.time[idx])),
-    time: data.hourly.time[idx],
-  }));
+  const precipPoints = precipIdxs.map((idx) => {
+    const time = data.hourly.time[idx];
+    return { x: xForTime(new Date(time)), time, isPast: new Date(time) < now };
+  });
 
   // Night band: a shaded background for is_day === 0 stretches, drawn
   // first so it paints behind the precip wash and both icon rows -- pure
@@ -252,14 +289,23 @@ function renderTodayChart(data) {
 
   const quarterMs = 15 * 60 * 1000;
   const barWidth = Math.max((quarterMs / spanMs) * plotWidth * 0.82, 3);
-  const bars = points
-    .map((p) => {
-      const family = precipFamily(p.code);
-      const barHeight = Math.min(p.mm / HEIGHT_MAX_MM, 1) * plotHeight;
-      const y = plotTop + plotHeight - barHeight;
-      return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" class="precip-bar precip-${family}"><title>${formatHour(p.time)} — ${p.mm.toFixed(1)}mm, ${describeCode(p.code)[0].toLowerCase()}</title></rect>`;
-    })
-    .join("");
+  const barFor = (p) => {
+    const family = precipFamily(p.code);
+    const barHeight = Math.min(p.mm / HEIGHT_MAX_MM, 1) * plotHeight;
+    const y = plotTop + plotHeight - barHeight;
+    return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" class="precip-bar precip-${family}"><title>${formatHour(p.time)} — ${p.mm.toFixed(1)}mm, ${describeCode(p.code)[0].toLowerCase()}</title></rect>`;
+  };
+  // Past bars wrapped in their own <g> rather than adding a .chart-past
+  // class straight onto each rect -- .precip-bar already sets its own
+  // opacity per type (rain/snow/storm), and stacking a second opacity class
+  // on the *same* element would just override that via the CSS cascade,
+  // losing the type distinction (the same presentation-attribute-vs-class
+  // precedence issue this project hit once before with the wind icons).
+  // Group opacity on a *parent* element compounds with a child's own
+  // opacity instead of colliding with it.
+  const bars =
+    `<g class="chart-past">${points.filter((p) => p.isPast).map(barFor).join("")}</g>` +
+    points.filter((p) => !p.isPast).map(barFor).join("");
 
   // Hour labels: moved to the top, matching the usual chart convention
   // (time axis reads top-to-bottom-then-across, not buried at the bottom).
@@ -289,7 +335,8 @@ function renderTodayChart(data) {
     .map((p) => {
       const icon = describeCode(p.code)[1];
       const y = Math.max(p.yTemp - 4, 10);
-      return `<text x="${p.x.toFixed(1)}" y="${y.toFixed(1)}" class="chart-icon-label" text-anchor="middle">${icon}</text>`;
+      const pastClass = p.isPast ? " chart-past" : "";
+      return `<text x="${p.x.toFixed(1)}" y="${y.toFixed(1)}" class="chart-icon-label${pastClass}" text-anchor="middle">${icon}</text>`;
     })
     .join("");
 
@@ -305,9 +352,16 @@ function renderTodayChart(data) {
     .map((p) => {
       const rotation = (p.windDir + 180) % 360;
       const y = Math.max(p.yWind - 4, 10);
-      return `<text x="${p.x.toFixed(1)}" y="${y.toFixed(1)}" class="chart-wind-arrow" text-anchor="middle" transform="rotate(${rotation.toFixed(0)}, ${p.x.toFixed(1)}, ${(y - 3).toFixed(1)})">&uarr;</text>`;
+      const pastClass = p.isPast ? " chart-past" : "";
+      return `<text x="${p.x.toFixed(1)}" y="${y.toFixed(1)}" class="chart-wind-arrow${pastClass}" text-anchor="middle" transform="rotate(${rotation.toFixed(0)}, ${p.x.toFixed(1)}, ${(y - 3).toFixed(1)})">&uarr;</text>`;
     })
     .join("");
+
+  // "Now" marker: with a past window as well as a forward one, now is no
+  // longer always the left edge, so it needs its own always-visible line --
+  // the existing hover-guide only appears on interaction, which isn't the
+  // same thing.
+  const nowMarker = `<line x1="${nowX.toFixed(1)}" x2="${nowX.toFixed(1)}" y1="${plotTop}" y2="${plotTop + plotHeight}" class="chart-now-marker" /><text x="${nowX.toFixed(1)}" y="${(plotTop + 9).toFixed(1)}" class="chart-now-label" text-anchor="middle">now</text>`;
 
   // Temperature axis (left) and wind axis (right, outer lane): both read
   // off the same fixed 0-25 scale as the icons themselves, in their own
@@ -353,11 +407,12 @@ function renderTodayChart(data) {
     .join("");
 
   wrap.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature and wind speed as icons, plus rainfall, for the next ${CONTEXT_HOURS} hours">
+    <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature and wind speed as icons, plus rainfall, for the last ${PAST_HOURS} hours and the next ${CONTEXT_HOURS} hours">
       ${nightRects}
       <g class="precip-band">${bars}</g>
       ${conditionIcons}
       ${windIcons}
+      ${nowMarker}
       ${dateLabel}
       ${hourLabels}
       ${tempAxis}
@@ -410,7 +465,8 @@ function attachChartHover(wrap, points) {
     const feelsLike = Math.abs(p.apparentTemp - p.temp) >= APPARENT_TEMP_GAP
       ? ` (feels ${Math.round(p.apparentTemp)}&deg;)`
       : "";
-    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong>${feelsLike} at ${formatHour(p.time)}<br>${p.mm.toFixed(1)}mm &middot; ${icon} ${desc.toLowerCase()}<br>${Math.round(p.windSpeed)}mph from ${compassLabel(p.windDir)}`;
+    const timeWord = p.isPast ? "was" : "at";
+    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong>${feelsLike} ${timeWord} ${formatHour(p.time)}<br>${p.mm.toFixed(1)}mm &middot; ${icon} ${desc.toLowerCase()}<br>${Math.round(p.windSpeed)}mph from ${compassLabel(p.windDir)}`;
     tooltip.classList.add("visible");
 
     const screenX = rect.left + p.x / scale;
@@ -440,6 +496,42 @@ function getChartTooltip() {
   return tooltip;
 }
 
+// Only today/tomorrow: UKV comes back null past day 2 (confirmed via a
+// real request, not assumed), so a day with no weather_code is skipped
+// rather than shown as a blank/broken card.
+function renderDailySummary(data) {
+  const container = document.getElementById("daily-summary");
+  // Located by matching today's actual date, not assumed to be index 0 --
+  // past_days (added for the chart's recent-past context) prepends a day
+  // to every series including this one, so index 0 is yesterday whenever
+  // past_days is set. Slicing from the matched index keeps this correct
+  // regardless of that setting.
+  const todayStr = data.current.time.slice(0, 10);
+  const todayIdx = Math.max(0, data.daily.time.indexOf(todayStr));
+  const labels = ["Today", "Tomorrow"];
+  const cards = data.daily.time
+    .slice(todayIdx)
+    .map((date, i) => {
+      const j = todayIdx + i;
+      if (data.daily.weather_code[j] == null) return "";
+      const [desc, icon] = describeCode(data.daily.weather_code[j]);
+      const hi = Math.round(data.daily.temperature_2m_max[j]);
+      const lo = Math.round(data.daily.temperature_2m_min[j]);
+      const rain = data.daily.precipitation_sum[j];
+      const rainNote = rain >= 0.1 ? `<div class="daily-rain">${rain.toFixed(1)}mm</div>` : "";
+      return `
+        <div class="daily-card">
+          <div class="daily-label">${labels[i] ?? formatDayMonth(date)}</div>
+          <div class="daily-icon">${icon}</div>
+          <div class="daily-range"><strong>${hi}&deg;</strong> / ${lo}&deg;</div>
+          <div class="daily-desc">${desc}</div>
+          ${rainNote}
+        </div>`;
+    })
+    .join("");
+  container.innerHTML = cards || `<p class="chart-empty">No further-day data available right now.</p>`;
+}
+
 function renderRaw(data) {
   document.getElementById("raw-output").textContent = JSON.stringify(data, null, 2);
 }
@@ -455,6 +547,7 @@ async function loadForecast() {
     renderRaw(data);
     renderCurrent(data);
     renderTodayChart(data);
+    renderDailySummary(data);
 
     statusEl.textContent = `Updated ${new Date().toLocaleTimeString("en-GB")} — Edinburgh (${data.latitude.toFixed(2)}, ${data.longitude.toFixed(2)})`;
     return data;

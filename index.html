@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>weather-interrogator</title>
-<link rel="stylesheet" href="css/style.css?v=23">
+<link rel="stylesheet" href="css/style.css?v=24">
 </head>
 <body>
 
@@ -18,8 +18,14 @@
 
   <section class="panel">
     <div id="current-card" class="current-card"></div>
-    <h2>Next 12 hours</h2>
+    <h2>Last 3 hours &amp; next 12</h2>
     <div id="today-chart" class="chart-wrap"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Coming days</h2>
+    <p class="stub-note">UKV (the 2km model everything else on this page uses) only forecasts about 2 days out &mdash; further than that would mean mixing in a lower-resolution global model, the same resolution mismatch this project already dropped <code>precipitation_probability</code> over. So: today and tomorrow, not a fabricated week.</p>
+    <div id="daily-summary" class="daily-summary"></div>
   </section>
 
   <section class="panel llm-stub">
@@ -62,9 +68,9 @@
 
 <footer class="site-footer">
   <p>Data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>. No API key, no tracking. On-device model, no server.</p>
-  <p class="deploy-stamp">Deployed 2026-09-06 19:17 (Europe/London)</p>
+  <p class="deploy-stamp">Deployed 2026-09-06 19:58 (Europe/London)</p>
 </footer>
 
-<script src="js/app.js?v=35"></script>
+<script src="js/app.js?v=36"></script>
 </body>
 </html>

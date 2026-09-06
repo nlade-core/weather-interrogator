@@ -132,6 +132,55 @@ main {
 
 .chart-empty { color: var(--muted); font-size: 0.9rem; }
 
+.daily-summary {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.daily-card {
+  flex: 1;
+  min-width: 120px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  text-align: center;
+}
+
+.daily-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.4rem;
+}
+
+.daily-icon { font-size: 1.8rem; }
+
+.daily-range { margin-top: 0.3rem; }
+.daily-range strong { color: var(--temp); font-size: 1.1rem; }
+
+.daily-desc { color: var(--muted); font-size: 0.8rem; margin-top: 0.2rem; }
+
+.daily-rain { color: var(--precip); font-size: 0.8rem; margin-top: 0.3rem; }
+
+/* Recent-past trailing context reads as already-happened, not more
+   forecast -- de-emphasised rather than removed, since it's still useful
+   detail on hover/inspection. */
+.chart-past { opacity: 0.45; }
+
+.chart-now-marker {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.chart-now-label {
+  fill: var(--accent);
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 .hover-guide {
   stroke: var(--muted);
   stroke-width: 1;
