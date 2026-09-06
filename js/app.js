@@ -13,7 +13,7 @@ FORECAST_URL.search = new URLSearchParams({
   timezone: "Europe/London",
   forecast_days: "2",
   models: "ukmo_uk_deterministic_2km",
-  current: "temperature_2m,weathercode,wind_speed_10m,precipitation",
+  current: "temperature_2m,apparent_temperature,weathercode,wind_speed_10m,precipitation",
   // wind_gusts_10m is a preceding-hour max (like probability/mm were) --
   // fetched hourly and shifted the same way. wind_speed_10m and
   // wind_direction_10m are instant, fetched at native 15-min resolution
@@ -22,8 +22,16 @@ FORECAST_URL.search = new URLSearchParams({
   // weathercode confirmed genuinely 15-min resolution (derived per-timestep
   // from cloud_cover etc., not hourly-native) -- fetched here instead of
   // hourly so condition icons stop repeating a stale value 4x per hour.
-  minutely_15: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,weathercode",
+  // apparent_temperature (wind-chill/heat-index combined) also confirmed
+  // genuinely 15-min, not just the hourly figure repeated.
+  minutely_15: "temperature_2m,apparent_temperature,precipitation,wind_speed_10m,wind_direction_10m,weathercode",
 });
+
+// Below this gap, actual and feels-like are close enough that showing both
+// is just visual/textual noise -- the dashed apparent-temp line only draws
+// where segments exceed it, and the tooltip/current-card only mention
+// "feels like" when they do too.
+const APPARENT_TEMP_GAP = 2;
 
 let latestData = null; // most recent fetch, read by the ask handler when building model context
 
@@ -106,8 +114,12 @@ function compassLabel(deg) {
 function renderCurrent(data) {
   const [desc, icon] = describeCode(data.current.weathercode);
   const card = document.getElementById("current-card");
+  const gap = data.current.apparent_temperature - data.current.temperature_2m;
+  const feelsLike = Math.abs(gap) >= APPARENT_TEMP_GAP
+    ? ` <span class="feels-like">(feels ${Math.round(data.current.apparent_temperature)}&deg;)</span>`
+    : "";
   card.innerHTML = `
-    <span class="temp">${icon} ${Math.round(data.current.temperature_2m)}&deg;C</span>
+    <span class="temp">${icon} ${Math.round(data.current.temperature_2m)}&deg;C${feelsLike}</span>
     <span class="desc">${desc} &middot; wind ${Math.round(data.current.wind_speed_10m)} km/h</span>
   `;
 }
@@ -163,10 +175,15 @@ function renderTodayChart(data) {
   // both bottom and top round to the nearest multiple of 10 (floor/ceil
   // respectively) around the data range (e.g. min 14 -> 10, max 19 -> 20).
   // Guards against the degenerate case where both round to the same value
-  // (a flat day sitting exactly on a multiple of 10).
+  // (a flat day sitting exactly on a multiple of 10). Apparent temperature
+  // only widens this range where it'll actually be drawn (see the dashed
+  // line below) -- including it everywhere would let a feels-like value
+  // that's never shown still stretch the axis.
   const temps = tempIdxs.map((i) => data.minutely_15.temperature_2m[i]);
-  const rawMin = Math.min(...temps);
-  const rawMax = Math.max(...temps);
+  const apparentTemps = tempIdxs.map((i) => data.minutely_15.apparent_temperature[i]);
+  const divergingApparent = apparentTemps.filter((a, i) => Math.abs(a - temps[i]) >= APPARENT_TEMP_GAP);
+  const rawMin = Math.min(...temps, ...divergingApparent);
+  const rawMax = Math.max(...temps, ...divergingApparent);
   const min = Math.floor(rawMin / 10) * 10;
   let max = Math.ceil(rawMax / 10) * 10;
   if (max <= min) max = min + 10;
@@ -194,6 +211,8 @@ function renderTodayChart(data) {
     x: xForTime(new Date(data.minutely_15.time[idx])),
     yTemp: yTemp(data.minutely_15.temperature_2m[idx]),
     temp: data.minutely_15.temperature_2m[idx],
+    apparentTemp: data.minutely_15.apparent_temperature[idx],
+    yApparent: yTemp(data.minutely_15.apparent_temperature[idx]),
     time: data.minutely_15.time[idx],
     mm: mmAt(idx),
     windSpeed: data.minutely_15.wind_speed_10m[idx],
@@ -202,6 +221,28 @@ function renderTodayChart(data) {
   }));
 
   const linePath = points.map((p) => `${p.x.toFixed(1)},${p.yTemp.toFixed(1)}`).join(" ");
+
+  // Feels-like drawn as a separate dashed line, but only across runs of
+  // points where it actually diverges from the actual reading -- a second
+  // line tracing the same path as the first on a calm day would be pure
+  // clutter with no new information in it. Single-point runs (a lone
+  // point with no diverging neighbour) are skipped since a 1-point
+  // polyline doesn't render as a line anyway.
+  const apparentSegments = [];
+  let currentSegment = [];
+  for (const p of points) {
+    const diverges = Math.abs(p.apparentTemp - p.temp) >= APPARENT_TEMP_GAP;
+    if (diverges) {
+      currentSegment.push(p);
+    } else {
+      if (currentSegment.length > 1) apparentSegments.push(currentSegment);
+      currentSegment = [];
+    }
+  }
+  if (currentSegment.length > 1) apparentSegments.push(currentSegment);
+  const apparentLines = apparentSegments
+    .map((seg) => `<polyline points="${seg.map((p) => `${p.x.toFixed(1)},${p.yApparent.toFixed(1)}`).join(" ")}" class="chart-line-apparent" fill="none" />`)
+    .join("");
 
   // Hour-mark positions for the bottom axis labels -- just time/x, no
   // probability attached (that field is gone; see the fetch config note).
@@ -307,6 +348,7 @@ function renderTodayChart(data) {
     <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature and rainfall for the rest of today">
       <g class="precip-band">${bars}</g>
       <polyline points="${linePath}" class="chart-line" fill="none" />
+      ${apparentLines}
       ${conditionIcons}
       ${windRow}
       ${dateLabel}
@@ -357,7 +399,10 @@ function attachChartHover(wrap, points) {
     hoverDot.setAttribute("cy", p.yTemp);
     hoverDot.classList.add("visible");
 
-    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong> at ${formatHour(p.time)}<br>${p.mm.toFixed(1)}mm &middot; ${icon} ${desc.toLowerCase()}<br>${Math.round(p.windSpeed)}km/h from ${compassLabel(p.windDir)}`;
+    const feelsLike = Math.abs(p.apparentTemp - p.temp) >= APPARENT_TEMP_GAP
+      ? ` (feels ${Math.round(p.apparentTemp)}&deg;)`
+      : "";
+    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong>${feelsLike} at ${formatHour(p.time)}<br>${p.mm.toFixed(1)}mm &middot; ${icon} ${desc.toLowerCase()}<br>${Math.round(p.windSpeed)}km/h from ${compassLabel(p.windDir)}`;
     tooltip.classList.add("visible");
 
     const screenX = rect.left + p.x / scale;
@@ -431,6 +476,7 @@ function withTimeout(promise, ms) {
 // genuine simple lookup instead of another fuzzy-parsing problem.
 const CATEGORY_MATCHERS = [
   ["temperature", /temp/i],
+  ["apparent_temperature", /apparent|feels? ?like|wind ?chill|heat index/i],
   ["rain", /rain|precip/i],
   ["wind", /\bwind\b/i],
   ["gusts", /gust/i],
@@ -457,6 +503,7 @@ function lookupWeatherData(data, categories) {
     // Same preceding-interval shift as the chart: the reading at index i+1
     // is the one actually in force during the slot at index i.
     temperature: () => `Temperature next ${CONTEXT_HOURS}h (15-min, HH:MM=C): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${data.minutely_15.temperature_2m[i].toFixed(1)}`).join(",")}`,
+    apparent_temperature: () => `Feels-like temperature (wind chill/heat index combined) next ${CONTEXT_HOURS}h (15-min, HH:MM=C): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${data.minutely_15.apparent_temperature[i].toFixed(1)}`).join(",")}`,
     rain: () => `Rain amount next ${CONTEXT_HOURS}h (15-min mm, HH:MM=mm): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${(data.minutely_15.precipitation[i + 1] ?? 0).toFixed(1)}`).join(",")}`,
     wind: () => `Wind next ${CONTEXT_HOURS}h (15-min, HH:MM=km/h+direction): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${Math.round(data.minutely_15.wind_speed_10m[i])}${compassLabel(data.minutely_15.wind_direction_10m[i])}`).join(",")}`,
     // wind_gusts_10m is a preceding-hour max, same convention precipitation_
@@ -468,7 +515,9 @@ function lookupWeatherData(data, categories) {
     conditions: () => `Conditions next ${CONTEXT_HOURS}h (hourly, HH:MM=type): ${idxsHourly.map((i) => { const mIdx = data.minutely_15.time.indexOf(data.hourly.time[i]); return `${formatHour(data.hourly.time[i])}=${conditionLabel(data.minutely_15.weathercode[mIdx])}`; }).join(",")}`,
   };
 
-  const lines = [`Current: ${data.current.temperature_2m.toFixed(1)}C, ${desc.toLowerCase()}, wind ${Math.round(data.current.wind_speed_10m)}km/h.`];
+  const currentGap = data.current.apparent_temperature - data.current.temperature_2m;
+  const feelsLikeNote = Math.abs(currentGap) >= APPARENT_TEMP_GAP ? ` (feels ${data.current.apparent_temperature.toFixed(1)}C)` : "";
+  const lines = [`Current: ${data.current.temperature_2m.toFixed(1)}C${feelsLikeNote}, ${desc.toLowerCase()}, wind ${Math.round(data.current.wind_speed_10m)}km/h.`];
   categories.forEach((c) => { if (builders[c]) lines.push(builders[c]()); });
   return lines.join("\n");
 }
@@ -566,7 +615,7 @@ async function runStagedAsk(session, question, data) {
 
   logEntry("status", "Deciding what data is needed…");
   const categoriesRaw = await session.prompt(
-    `Available data categories for the next ${CONTEXT_HOURS} hours: temperature, rain amount, wind (speed+direction), wind gusts, conditions (sky/precipitation type). Given the goal "${goal}", which categories are actually needed to answer it? List just the relevant category names.`
+    `Available data categories for the next ${CONTEXT_HOURS} hours: temperature, feels-like temperature (wind chill/heat index), rain amount, wind (speed+direction), wind gusts, conditions (sky/precipitation type). Given the goal "${goal}", which categories are actually needed to answer it? List just the relevant category names.`
   );
   logEntry("reasoning", `Data needed: ${categoriesRaw}`);
 
