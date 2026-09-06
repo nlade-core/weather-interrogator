@@ -85,6 +85,10 @@ main {
 
 .chart-svg { width: 100%; height: auto; }
 
+/* Distinct dark-blue tint rather than plain black -- the panel background
+   is already near-black, so a black overlay barely reads as different. */
+.chart-night-band { fill: #0a1330; opacity: 0.55; }
+
 .chart-axis-label {
   fill: var(--muted);
   font-size: 10px;

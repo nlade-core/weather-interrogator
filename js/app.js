@@ -29,7 +29,11 @@ FORECAST_URL.search = new URLSearchParams({
   // hourly so condition icons stop repeating a stale value 4x per hour.
   // apparent_temperature (wind-chill/heat-index combined) also confirmed
   // genuinely 15-min, not just the hourly figure repeated.
-  minutely_15: "temperature_2m,apparent_temperature,precipitation,wind_speed_10m,wind_direction_10m,weathercode",
+  // is_day confirmed to flip cleanly at 15-min resolution (checked against
+  // a real sunrise: 06:15 still 0, 06:30 already 1) -- an astronomical
+  // calculation, not model-native cadence, so it's genuinely this precise
+  // rather than a repeated hourly value.
+  minutely_15: "temperature_2m,apparent_temperature,precipitation,wind_speed_10m,wind_direction_10m,weathercode,is_day",
 });
 
 // Below this gap, actual and feels-like are close enough that showing both
@@ -214,6 +218,28 @@ function renderTodayChart(data) {
     time: data.hourly.time[idx],
   }));
 
+  // Night band: a shaded background for is_day === 0 stretches, drawn
+  // first so it paints behind the precip wash and both icon rows -- pure
+  // background context, not a data series competing for attention.
+  // Band edges sit at the midpoint between the last/first samples either
+  // side of a transition rather than snapping to a sample point, since
+  // is_day flips somewhere between two 15-min readings, not exactly on one.
+  const nightBands = [];
+  let nightStart = null;
+  points.forEach((p, i) => {
+    const isNight = data.minutely_15.is_day[p.idx] === 0;
+    if (isNight && nightStart === null) {
+      nightStart = i === 0 ? p.x : (points[i - 1].x + p.x) / 2;
+    } else if (!isNight && nightStart !== null) {
+      nightBands.push([nightStart, (points[i - 1].x + p.x) / 2]);
+      nightStart = null;
+    }
+  });
+  if (nightStart !== null) nightBands.push([nightStart, padLeft + plotWidth]);
+  const nightRects = nightBands
+    .map(([x1, x2]) => `<rect x="${x1.toFixed(1)}" y="${plotTop}" width="${(x2 - x1).toFixed(1)}" height="${plotHeight}" class="chart-night-band" />`)
+    .join("");
+
   // Bar height is predicted amount (mm) directly rather than probability --
   // probability isn't fetched at all now (pinned to the UKV model, which
   // can't produce it; see the fetch config note). Amount is real UKV data,
@@ -328,6 +354,7 @@ function renderTodayChart(data) {
 
   wrap.innerHTML = `
     <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature and wind speed as icons, plus rainfall, for the next ${CONTEXT_HOURS} hours">
+      ${nightRects}
       <g class="precip-band">${bars}</g>
       ${conditionIcons}
       ${windIcons}
