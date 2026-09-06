@@ -1,52 +1,67 @@
-const EDINBURGH = { latitude: 55.9533, longitude: -3.1883 };
+// Mutable, not a constant -- location can change at runtime (see the
+// location-picker section near the bottom of this file). isUK gates the
+// UKV model pin below: UKV only covers the UK domain, so a location
+// outside it needs best_match instead, or every field would just come
+// back null the way precipitation_probability does under UKV.
+let LOCATION = { latitude: 55.9533, longitude: -3.1883, name: "Edinburgh", isUK: true };
 
-const FORECAST_URL = new URL("https://api.open-meteo.com/v1/forecast");
-// Pinned to the explicit UK model rather than best_match: same grid cell,
-// same values for every field that's genuinely UKV (confirmed identical
-// lat/lon/elevation either way) -- but a field UKV can't provide (like
-// precipitation_probability, which needs an ensemble UKV doesn't have)
-// comes back null instead of best_match silently substituting a
-// mismatched ~27km source and us displaying it as if it were local.
-FORECAST_URL.search = new URLSearchParams({
-  latitude: EDINBURGH.latitude,
-  longitude: EDINBURGH.longitude,
-  timezone: "Europe/London",
-  forecast_days: "2",
-  // Extends minutely_15/hourly backward by a full day at the same
-  // resolution as the forward data (confirmed: still genuinely 15-min
-  // throughout, not a downgraded or repeated series) -- used for the
-  // recent-past trailing context on the chart, a few hours of it, not the
-  // whole day.
-  past_days: "1",
-  models: "ukmo_uk_deterministic_2km",
-  // UK convention for wind speed (Met Office forecasts, broadcast weather)
-  // is mph, not km/h -- converted server-side rather than client-side math,
-  // so every wind_speed_10m/wind_gusts_10m value in the response already
-  // arrives in mph. wind_direction_10m (degrees) is unaffected.
-  wind_speed_unit: "mph",
-  current: "temperature_2m,apparent_temperature,weathercode,wind_speed_10m,precipitation",
-  // wind_gusts_10m is a preceding-hour max (like probability/mm were) --
-  // fetched hourly and shifted the same way. wind_speed_10m and
-  // wind_direction_10m are instant, fetched at native 15-min resolution
-  // via minutely_15 instead, no shift needed.
-  hourly: "wind_gusts_10m",
-  // weathercode confirmed genuinely 15-min resolution (derived per-timestep
-  // from cloud_cover etc., not hourly-native) -- fetched here instead of
-  // hourly so condition icons stop repeating a stale value 4x per hour.
-  // apparent_temperature (wind-chill/heat-index combined) also confirmed
-  // genuinely 15-min, not just the hourly figure repeated.
-  // is_day confirmed to flip cleanly at 15-min resolution (checked against
-  // a real sunrise: 06:15 still 0, 06:30 already 1) -- an astronomical
-  // calculation, not model-native cadence, so it's genuinely this precise
-  // rather than a repeated hourly value.
-  minutely_15: "temperature_2m,apparent_temperature,precipitation,wind_speed_10m,wind_direction_10m,weathercode,is_day",
-  // Daily summary: UKV only has real (non-null) data 2 days out (confirmed
-  // -- days 3+ came back null when tried), so this covers today/tomorrow
-  // only, not a fabricated week. Deliberately not mixing in a
-  // lower-resolution global model to fake more days -- that's the same
-  // resolution-mismatch mistake precipitation_probability was dropped over.
-  daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum",
-});
+// Rebuilt fresh on every fetch (not a fixed constant) since LOCATION can
+// change. timezone=auto rather than a hardcoded "Europe/London" -- checked
+// against a real request, resolves correctly per-coordinate (confirmed
+// Europe/London for Edinburgh, Europe/Paris for Paris), so it generalises
+// safely rather than showing UK local time for a non-UK location.
+function buildForecastUrl(location) {
+  const url = new URL("https://api.open-meteo.com/v1/forecast");
+  const params = {
+    latitude: location.latitude,
+    longitude: location.longitude,
+    timezone: "auto",
+    forecast_days: "2",
+    // Extends minutely_15/hourly backward by a full day at the same
+    // resolution as the forward data (confirmed: still genuinely 15-min
+    // throughout, not a downgraded or repeated series) -- used for the
+    // recent-past trailing context on the chart, a few hours of it, not
+    // the whole day.
+    past_days: "1",
+    // UK convention for wind speed (Met Office forecasts, broadcast
+    // weather) is mph, not km/h -- converted server-side rather than
+    // client-side math, so every wind_speed_10m/wind_gusts_10m value in
+    // the response already arrives in mph. wind_direction_10m (degrees)
+    // is unaffected. Kept as mph for every location, not just UK ones --
+    // consistency across the app over per-location unit-switching.
+    wind_speed_unit: "mph",
+    current: "temperature_2m,apparent_temperature,weathercode,wind_speed_10m,precipitation",
+    // wind_gusts_10m is a preceding-hour max (like probability/mm were) --
+    // fetched hourly and shifted the same way. wind_speed_10m and
+    // wind_direction_10m are instant, fetched at native 15-min resolution
+    // via minutely_15 instead, no shift needed.
+    hourly: "wind_gusts_10m",
+    // weathercode confirmed genuinely 15-min resolution (derived
+    // per-timestep from cloud_cover etc., not hourly-native) -- fetched
+    // here instead of hourly so condition icons stop repeating a stale
+    // value 4x per hour. apparent_temperature also confirmed genuinely
+    // 15-min. is_day confirmed to flip cleanly at 15-min resolution too
+    // (checked against a real sunrise: 06:15 still 0, 06:30 already 1).
+    minutely_15: "temperature_2m,apparent_temperature,precipitation,wind_speed_10m,wind_direction_10m,weathercode,is_day",
+    // Daily summary: UKV only has real (non-null) data 2 days out
+    // (confirmed -- days 3+ came back null when tried), so this covers
+    // today/tomorrow only, not a fabricated week. Deliberately not mixing
+    // in a lower-resolution global model to fake more days -- that's the
+    // same resolution-mismatch mistake precipitation_probability was
+    // dropped over.
+    daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum",
+  };
+  // Pinned to the explicit UK model rather than best_match for UK
+  // locations: same grid cell, same values for every field that's
+  // genuinely UKV, but a field UKV can't provide comes back null instead
+  // of best_match silently substituting a mismatched ~27km source and it
+  // being displayed as if it were local. Omitted entirely for a non-UK
+  // location -- UKV has no data outside the UK domain at all, so falling
+  // through to best_match is the only real option, not a lesser choice.
+  if (location.isUK) params.models = "ukmo_uk_deterministic_2km";
+  url.search = new URLSearchParams(params);
+  return url;
+}
 
 // Below this gap, actual and feels-like are close enough that showing both
 // is just visual/textual noise -- the dashed apparent-temp line only draws
@@ -425,7 +440,43 @@ function renderTodayChart(data) {
   `;
 
   attachChartHover(wrap, points);
+  renderDominantFactor(points);
 }
+
+// v1 heuristic, deliberately not a settled design (this was raised as the
+// open-ended "relative importance of variables" question, with no concrete
+// design yet) -- picks ONE dominant factor from a fixed priority list based
+// on simple thresholds, using only the forward-looking portion of the
+// window (recent-past trailing context isn't "what's coming", so it's
+// excluded here). A real version of this would need actual thought about
+// what threshold values matter and how they interact, not arbitrary
+// round numbers picked without testing against how people actually judge
+// a day's weather.
+function computeDominantFactor(points) {
+  const forward = points.filter((p) => !p.isPast);
+  if (!forward.length) return null;
+
+  const maxWind = Math.max(...forward.map((p) => p.windSpeed));
+  const maxTemp = Math.max(...forward.map((p) => p.temp));
+  const minTemp = Math.min(...forward.map((p) => p.temp));
+  const maxApparentGap = Math.max(...forward.map((p) => Math.abs(p.apparentTemp - p.temp)));
+  const maxRainSlot = Math.max(...forward.map((p) => p.mm));
+  const totalRain = forward.reduce((sum, p) => sum + p.mm, 0);
+
+  if (maxWind >= 20) return `&#128168; Wind looks like the main factor today &mdash; up to ${Math.round(maxWind)}mph.`;
+  if (maxTemp >= 25) return `&#129395; Heat looks like the main factor today &mdash; up to ${Math.round(maxTemp)}&deg;C.`;
+  if (minTemp <= 2) return `&#129398; Cold looks like the main factor today &mdash; down to ${Math.round(minTemp)}&deg;C.`;
+  if (maxApparentGap >= 4) return `&#127788;&#65039; Wind chill looks like the main factor today &mdash; feels up to ${Math.round(maxApparentGap)}&deg; different from the actual temperature.`;
+  if (maxRainSlot >= 1 || totalRain >= 3) return `&#127783;&#65039; Rain looks like the main factor today &mdash; ${totalRain.toFixed(1)}mm expected.`;
+  return `&#128522; Nothing stands out &mdash; conditions look calm.`;
+}
+
+function renderDominantFactor(points) {
+  const el = document.getElementById("dominant-factor");
+  el.innerHTML = computeDominantFactor(points) ?? "";
+}
+
+let dismissTouchTooltip = null; // tracked across renders so re-running attachChartHover (e.g. after a location change) replaces the previous document-level listener instead of stacking another one
 
 function attachChartHover(wrap, points) {
   const svg = wrap.querySelector(".chart-svg");
@@ -475,14 +526,31 @@ function attachChartHover(wrap, points) {
     tooltip.style.top = `${screenY - 10}px`;
   }
 
-  function onLeave() {
+  function hide() {
     guide.classList.remove("visible");
     hoverDot.classList.remove("visible");
     tooltip.classList.remove("visible");
   }
 
+  // Touch has no hover state -- pointerleave fires the instant a finger
+  // lifts, which would make the tooltip flash and vanish before it's
+  // readable. So a touch pointer is left visible after the tap (ignored
+  // here) and dismissed instead by a tap anywhere outside the chart,
+  // matching a common mobile tap-to-reveal pattern rather than a hover one.
+  function onLeave(evt) {
+    if (evt?.pointerType === "touch") return;
+    hide();
+  }
+
+  hitArea.addEventListener("pointerdown", onMove);
   hitArea.addEventListener("pointermove", onMove);
   hitArea.addEventListener("pointerleave", onLeave);
+
+  if (dismissTouchTooltip) document.removeEventListener("pointerdown", dismissTouchTooltip);
+  dismissTouchTooltip = (evt) => {
+    if (evt.pointerType === "touch" && !hitArea.contains(evt.target)) hide();
+  };
+  document.addEventListener("pointerdown", dismissTouchTooltip);
 }
 
 function getChartTooltip() {
@@ -536,10 +604,79 @@ function renderRaw(data) {
   document.getElementById("raw-output").textContent = JSON.stringify(data, null, 2);
 }
 
+// Nominatim (OpenStreetMap) -- free, no key, matching the no-signup
+// philosophy the rest of the app has kept to everywhere else. addressdetails
+// gets a country_code, needed to decide whether UKV (UK-only) or best_match
+// is the right model for the result -- confirmed the response shape (name,
+// address.country_code) against real queries for both a UK and a non-UK
+// location before relying on it.
+async function geocodeLocation(query) {
+  const url = new URL("https://nominatim.openstreetmap.org/search");
+  url.search = new URLSearchParams({ q: query, format: "json", limit: "1", addressdetails: "1" });
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Geocoding failed (${res.status})`);
+  const results = await res.json();
+  if (!results.length) throw new Error(`Couldn't find "${query}"`);
+  const r = results[0];
+  return {
+    latitude: parseFloat(r.lat),
+    longitude: parseFloat(r.lon),
+    name: r.name || r.display_name.split(",")[0],
+    isUK: r.address?.country_code === "gb",
+  };
+}
+
+function setLocationCopy() {
+  document.getElementById("subtitle").textContent = `Short-term forecast for ${LOCATION.name}, pulled straight from Open-Meteo.`;
+  document.getElementById("daily-note").innerHTML = LOCATION.isUK
+    ? `UKV (the 2km model everything else on this page uses) only forecasts about 2 days out &mdash; further than that would mean mixing in a lower-resolution global model, the same resolution mismatch this project already dropped <code>precipitation_probability</code> over. So: today and tomorrow, not a fabricated week.`
+    : `${LOCATION.name} is outside the UK, so this uses Open-Meteo's <code>best_match</code> model rather than the UK-specific 2km UKV model this page uses for UK locations &mdash; a coarser global model, not the same resolution or quality guarantee.`;
+}
+
+function setupLocationPicker() {
+  const form = document.getElementById("location-form");
+  const input = document.getElementById("location-input");
+  const submitBtn = document.getElementById("location-submit");
+  const statusEl = document.getElementById("location-status");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const query = input.value.trim();
+    if (!query) return;
+
+    submitBtn.disabled = true;
+    statusEl.textContent = "Looking up…";
+    statusEl.classList.remove("error");
+
+    try {
+      LOCATION = await geocodeLocation(query);
+      setLocationCopy();
+      input.value = "";
+      statusEl.textContent = "";
+
+      // The existing Ask session's system prompt names the old location --
+      // reset rather than let it silently keep answering as if still
+      // there. askedBefore reset too, so the next question gets the full
+      // staged pipeline again rather than skipping straight to a direct
+      // answer against a session that no longer exists.
+      chatSession = null;
+      askedBefore = false;
+
+      forecastPromise = loadForecast();
+      await forecastPromise;
+    } catch (err) {
+      statusEl.textContent = err.message;
+      statusEl.classList.add("error");
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+}
+
 async function loadForecast() {
   const statusEl = document.getElementById("status");
   try {
-    const res = await fetch(FORECAST_URL);
+    const res = await fetch(buildForecastUrl(LOCATION));
     if (!res.ok) throw new Error(`Open-Meteo responded ${res.status}`);
     const data = await res.json();
     latestData = data;
@@ -549,7 +686,7 @@ async function loadForecast() {
     renderTodayChart(data);
     renderDailySummary(data);
 
-    statusEl.textContent = `Updated ${new Date().toLocaleTimeString("en-GB")} — Edinburgh (${data.latitude.toFixed(2)}, ${data.longitude.toFixed(2)})`;
+    statusEl.textContent = `Updated ${new Date().toLocaleTimeString("en-GB")} — ${LOCATION.name} (${data.latitude.toFixed(2)}, ${data.longitude.toFixed(2)})`;
     return data;
   } catch (err) {
     statusEl.textContent = `Failed to load forecast: ${err.message}`;
@@ -563,7 +700,12 @@ async function loadForecast() {
 // once its context is full of raw numbers than when it's asked to work in
 // stages. Real numbers only enter context per-question, and only the
 // categories that question actually needs (see the staged Ask flow below).
-const WEATHER_SYSTEM_PROMPT = `Weather assistant for Edinburgh, covering only the next ${CONTEXT_HOURS} hours from now (no other days, no rain-probability figure -- deliberately not provided, the available one wasn't locally reliable). You don't have any weather numbers yet: for each question, you'll first be asked to restate what the person actually wants to know, then which data categories would help, then you'll be given only that data to answer with. Keep every answer to 1-2 sentences, and say so plainly if the data you're given isn't enough to answer confidently -- don't guess.`;
+// A function, not a constant string -- LOCATION.name can change at
+// runtime, and this needs re-evaluating fresh at session-creation time
+// rather than being baked in once at module load.
+function buildSystemPrompt() {
+  return `Weather assistant for ${LOCATION.name}, covering only the next ${CONTEXT_HOURS} hours from now (no other days, no rain-probability figure -- deliberately not provided, the available one wasn't locally reliable). You don't have any weather numbers yet: for each question, you'll first be asked to restate what the person actually wants to know, then which data categories would help, then you'll be given only that data to answer with. Keep every answer to 1-2 sentences, and say so plainly if the data you're given isn't enough to answer confidently -- don't guess.`;
+}
 
 function withTimeout(promise, ms) {
   return Promise.race([
@@ -635,6 +777,11 @@ function lookupWeatherData(data, categories) {
 let forecastPromise = null;
 let chatSession = null; // Promise<session> | null, persistent once created
 let promptOk = false;
+// Module-level (not local to setupAsk) so a location change can reset it
+// alongside chatSession -- see resetChatSessionForNewLocation below. First
+// question in a session gets the full staged pipeline; follow-ups just
+// answer directly against the context already built up.
+let askedBefore = false;
 
 function setStatusPill(className, text, pillId = "model-status-pill") {
   const pill = document.getElementById(pillId);
@@ -680,7 +827,7 @@ function ensureChatSession() {
     setStatusPill("preparing", "preparing model…");
 
     const session = await LanguageModel.create({
-      initialPrompts: [{ role: "system", content: WEATHER_SYSTEM_PROMPT }],
+      initialPrompts: [{ role: "system", content: buildSystemPrompt() }],
       monitor(m) {
         m.addEventListener("downloadprogress", (e) => {
           const pct = Math.round(e.loaded * 100);
@@ -739,7 +886,6 @@ function setupAsk() {
   const form = document.getElementById("ask-form");
   const input = document.getElementById("ask-input");
   const submitBtn = document.getElementById("ask-submit");
-  let askedBefore = false; // first question in a session gets the full staged pipeline; follow-ups just answer directly against the context already built up -- a follow-up-specific pipeline is a later idea, not this one
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -913,6 +1059,7 @@ function setupWebcam() {
 
 setupAsk();
 checkModelCapability();
+setupLocationPicker();
 forecastPromise = loadForecast();
 
 setupWebcam();

@@ -4,13 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>weather-interrogator</title>
-<link rel="stylesheet" href="css/style.css?v=24">
+<link rel="stylesheet" href="css/style.css?v=25">
 </head>
 <body>
 
 <header class="site-header">
   <h1>weather&#8209;interrogator</h1>
-  <p class="subtitle">Short-term forecast for Edinburgh, pulled straight from Open-Meteo.</p>
+  <p id="subtitle" class="subtitle">Short-term forecast for Edinburgh, pulled straight from Open-Meteo.</p>
+  <form id="location-form" class="location-form">
+    <input id="location-input" type="text" placeholder="Change location, e.g. Glasgow" autocomplete="off">
+    <button id="location-submit" type="submit">Go</button>
+  </form>
+  <p id="location-status" class="location-status"></p>
 </header>
 
 <main>
@@ -18,13 +23,14 @@
 
   <section class="panel">
     <div id="current-card" class="current-card"></div>
+    <p id="dominant-factor" class="dominant-factor"></p>
     <h2>Last 3 hours &amp; next 12</h2>
     <div id="today-chart" class="chart-wrap"></div>
   </section>
 
   <section class="panel">
     <h2>Coming days</h2>
-    <p class="stub-note">UKV (the 2km model everything else on this page uses) only forecasts about 2 days out &mdash; further than that would mean mixing in a lower-resolution global model, the same resolution mismatch this project already dropped <code>precipitation_probability</code> over. So: today and tomorrow, not a fabricated week.</p>
+    <p id="daily-note" class="stub-note">UKV (the 2km model everything else on this page uses) only forecasts about 2 days out &mdash; further than that would mean mixing in a lower-resolution global model, the same resolution mismatch this project already dropped <code>precipitation_probability</code> over. So: today and tomorrow, not a fabricated week.</p>
     <div id="daily-summary" class="daily-summary"></div>
   </section>
 
@@ -68,9 +74,9 @@
 
 <footer class="site-footer">
   <p>Data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>. No API key, no tracking. On-device model, no server.</p>
-  <p class="deploy-stamp">Deployed 2026-09-06 19:58 (Europe/London)</p>
+  <p class="deploy-stamp">Deployed 2026-09-06 20:11 (Europe/London)</p>
 </footer>
 
-<script src="js/app.js?v=36"></script>
+<script src="js/app.js?v=37"></script>
 </body>
 </html>

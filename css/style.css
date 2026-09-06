@@ -32,6 +32,41 @@ body {
 .site-header h1 { font-size: 1.6rem; font-weight: 600; }
 .subtitle { color: var(--muted); margin-top: 0.25rem; font-size: 0.95rem; }
 
+.location-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  max-width: 320px;
+}
+
+.location-form input {
+  flex: 1;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.85rem;
+}
+
+.location-form input:focus { outline: 1px solid var(--accent); }
+
+.location-form button {
+  background: var(--border);
+  color: var(--text);
+  border: none;
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.location-form button:disabled { color: var(--muted); cursor: not-allowed; }
+
+.location-status { margin-top: 0.3rem; font-size: 0.8rem; color: var(--muted); }
+.location-status.error { color: #ff8080; }
+
 .status { margin-bottom: 1rem; color: var(--muted); font-size: 0.9rem; }
 .status.error { color: #ff8080; }
 
@@ -80,6 +115,12 @@ main {
 .current-card .temp { font-size: 1.8rem; font-weight: 600; }
 .current-card .feels-like { font-size: 1rem; font-weight: 400; color: var(--muted); }
 .current-card .desc { color: var(--muted); }
+
+.dominant-factor {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.75rem;
+}
 
 .chart-wrap { width: 100%; }
 
