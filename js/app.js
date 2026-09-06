@@ -125,18 +125,21 @@ function renderCurrent(data) {
 }
 
 const CHART = {
-  width: 760,
+  width: 800,
   padLeft: 34, // room for the temperature axis (ticks + "16°" labels)
-  padRight: 38, // room for the precip-probability axis (ticks + "100%" labels)
+  padRight: 78, // room for two stacked right-side axes: precip mm (inner) and wind km/h (outer)
   topStripHeight: 30, // date, then hour labels
   plotHeight: 170, // main temp line + precip wash area
   axisLabelHeight: 30, // wind arrow + speed row at the bottom
+  windAxisOffset: 40, // how far right of the precip axis the wind axis lane sits
 };
 
 // "Nice" round-number ticks (steps of 1/2/5/10) rather than ticks derived
 // straight from the data's own min/max -- an axis should read in numbers a
 // person would actually think in, not whatever the data happened to span.
-function niceTemperatureTicks(min, max) {
+// Shared by the temperature and wind axes, not temperature-specific despite
+// the name history.
+function niceAxisTicks(min, max) {
   const range = max - min || 1;
   const rawStep = range / 4;
   const step = [1, 2, 5, 10].find((s) => s >= rawStep) || 10;
@@ -186,7 +189,7 @@ function renderTodayChart(data) {
   let max = Math.ceil(rawMax / 10) * 10;
   if (max <= min) max = min + 10;
 
-  const { width, padLeft, padRight, topStripHeight, plotHeight, axisLabelHeight } = CHART;
+  const { width, padLeft, padRight, topStripHeight, plotHeight, axisLabelHeight, windAxisOffset } = CHART;
   const plotWidth = width - padLeft - padRight;
   const plotTop = topStripHeight;
   const height = topStripHeight + plotHeight + axisLabelHeight;
@@ -226,6 +229,18 @@ function renderTodayChart(data) {
   // appearing and disappearing as it crosses the divergence threshold.
   const apparentPath = points.map((p) => `${p.x.toFixed(1)},${p.yApparent.toFixed(1)}`).join(" ");
   const apparentLines = `<polyline points="${apparentPath}" class="chart-line-apparent" fill="none" />`;
+
+  // Wind speed gets its own real axis (see windAxis below) rather than the
+  // earlier self-scaled demo version -- min/max floor/ceil to steps of 5
+  // (wind numbers don't round as cleanly to 10s as temperature does), and
+  // never dips below 0 since speed can't be negative.
+  const windSpeeds = points.map((p) => p.windSpeed);
+  const windMin = Math.max(0, Math.floor(Math.min(...windSpeeds) / 5) * 5);
+  let windMax = Math.ceil(Math.max(...windSpeeds) / 5) * 5;
+  if (windMax <= windMin) windMax = windMin + 5;
+  const yWind = (v) => plotTop + plotHeight - ((v - windMin) / (windMax - windMin)) * plotHeight;
+  const windPath = points.map((p) => `${p.x.toFixed(1)},${yWind(p.windSpeed).toFixed(1)}`).join(" ");
+  const windLine = `<polyline points="${windPath}" class="chart-line-wind" fill="none" />`;
 
   // Hour-mark positions for the bottom axis labels -- just time/x, no
   // probability attached (that field is gone; see the fetch config note).
@@ -306,7 +321,7 @@ function renderTodayChart(data) {
   // extremes. Precip axis (right): fixed mm ticks matching HEIGHT_MAX_MM --
   // that's what bar *height* now encodes; type (colour) isn't positional,
   // so it doesn't need an axis.
-  const tempAxis = niceTemperatureTicks(min, max)
+  const tempAxis = niceAxisTicks(min, max)
     .map((tv) => {
       const ty = yTemp(tv);
       return (
@@ -327,17 +342,33 @@ function renderTodayChart(data) {
     })
     .join("");
 
+  // Wind axis: a second, further-out right-side lane, coloured to match the
+  // wind line so it reads as "this axis belongs to that line" rather than
+  // just more numbers next to the precip ones.
+  const windAxis = niceAxisTicks(windMin, windMax)
+    .map((tv) => {
+      const ty = yWind(tv);
+      const xWind = padLeft + plotWidth + windAxisOffset;
+      return (
+        `<line x1="${xWind}" x2="${(xWind + 4).toFixed(1)}" y1="${ty.toFixed(1)}" y2="${ty.toFixed(1)}" class="axis-tick-wind" />` +
+        `<text x="${(xWind + 7).toFixed(1)}" y="${(ty + 3).toFixed(1)}" class="axis-tick-label-wind" text-anchor="start">${tv}km/h</text>`
+      );
+    })
+    .join("");
+
   wrap.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature and rainfall for the rest of today">
+    <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature, feels-like temperature, rainfall, and wind speed for the next ${CONTEXT_HOURS} hours">
       <g class="precip-band">${bars}</g>
       <polyline points="${linePath}" class="chart-line" fill="none" />
       ${apparentLines}
+      ${windLine}
       ${conditionIcons}
       ${windRow}
       ${dateLabel}
       ${hourLabels}
       ${tempAxis}
       ${precipAxis}
+      ${windAxis}
       <line class="hover-guide" x1="0" x2="0" y1="${plotTop}" y2="${plotTop + plotHeight}" />
       <circle class="hover-dot" r="5" cx="0" cy="0" />
       <rect class="chart-hit-area" x="${padLeft}" y="${plotTop}" width="${plotWidth}" height="${plotHeight}" fill="transparent" />
