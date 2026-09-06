@@ -176,14 +176,12 @@ function renderTodayChart(data) {
   // respectively) around the data range (e.g. min 14 -> 10, max 19 -> 20).
   // Guards against the degenerate case where both round to the same value
   // (a flat day sitting exactly on a multiple of 10). Apparent temperature
-  // only widens this range where it'll actually be drawn (see the dashed
-  // line below) -- including it everywhere would let a feels-like value
-  // that's never shown still stretch the axis.
+  // is plotted along its full length (see below), so it always factors
+  // into the range, not just where it happens to diverge.
   const temps = tempIdxs.map((i) => data.minutely_15.temperature_2m[i]);
   const apparentTemps = tempIdxs.map((i) => data.minutely_15.apparent_temperature[i]);
-  const divergingApparent = apparentTemps.filter((a, i) => Math.abs(a - temps[i]) >= APPARENT_TEMP_GAP);
-  const rawMin = Math.min(...temps, ...divergingApparent);
-  const rawMax = Math.max(...temps, ...divergingApparent);
+  const rawMin = Math.min(...temps, ...apparentTemps);
+  const rawMax = Math.max(...temps, ...apparentTemps);
   const min = Math.floor(rawMin / 10) * 10;
   let max = Math.ceil(rawMax / 10) * 10;
   if (max <= min) max = min + 10;
@@ -222,27 +220,12 @@ function renderTodayChart(data) {
 
   const linePath = points.map((p) => `${p.x.toFixed(1)},${p.yTemp.toFixed(1)}`).join(" ");
 
-  // Feels-like drawn as a separate dashed line, but only across runs of
-  // points where it actually diverges from the actual reading -- a second
-  // line tracing the same path as the first on a calm day would be pure
-  // clutter with no new information in it. Single-point runs (a lone
-  // point with no diverging neighbour) are skipped since a 1-point
-  // polyline doesn't render as a line anyway.
-  const apparentSegments = [];
-  let currentSegment = [];
-  for (const p of points) {
-    const diverges = Math.abs(p.apparentTemp - p.temp) >= APPARENT_TEMP_GAP;
-    if (diverges) {
-      currentSegment.push(p);
-    } else {
-      if (currentSegment.length > 1) apparentSegments.push(currentSegment);
-      currentSegment = [];
-    }
-  }
-  if (currentSegment.length > 1) apparentSegments.push(currentSegment);
-  const apparentLines = apparentSegments
-    .map((seg) => `<polyline points="${seg.map((p) => `${p.x.toFixed(1)},${p.yApparent.toFixed(1)}`).join(" ")}" class="chart-line-apparent" fill="none" />`)
-    .join("");
+  // Feels-like plotted the full length of the window as its own dashed
+  // line, same as the actual-temperature line -- the gap between the two
+  // lines is itself the signal, so it should read continuously rather than
+  // appearing and disappearing as it crosses the divergence threshold.
+  const apparentPath = points.map((p) => `${p.x.toFixed(1)},${p.yApparent.toFixed(1)}`).join(" ");
+  const apparentLines = `<polyline points="${apparentPath}" class="chart-line-apparent" fill="none" />`;
 
   // Hour-mark positions for the bottom axis labels -- just time/x, no
   // probability attached (that field is gone; see the fetch config note).
