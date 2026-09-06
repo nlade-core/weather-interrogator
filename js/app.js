@@ -13,6 +13,11 @@ FORECAST_URL.search = new URLSearchParams({
   timezone: "Europe/London",
   forecast_days: "2",
   models: "ukmo_uk_deterministic_2km",
+  // UK convention for wind speed (Met Office forecasts, broadcast weather)
+  // is mph, not km/h -- converted server-side rather than client-side math,
+  // so every wind_speed_10m/wind_gusts_10m value in the response already
+  // arrives in mph. wind_direction_10m (degrees) is unaffected.
+  wind_speed_unit: "mph",
   current: "temperature_2m,apparent_temperature,weathercode,wind_speed_10m,precipitation",
   // wind_gusts_10m is a preceding-hour max (like probability/mm were) --
   // fetched hourly and shifted the same way. wind_speed_10m and
@@ -120,34 +125,19 @@ function renderCurrent(data) {
     : "";
   card.innerHTML = `
     <span class="temp">${icon} ${Math.round(data.current.temperature_2m)}&deg;C${feelsLike}</span>
-    <span class="desc">${desc} &middot; wind ${Math.round(data.current.wind_speed_10m)} km/h</span>
+    <span class="desc">${desc} &middot; wind ${Math.round(data.current.wind_speed_10m)} mph</span>
   `;
 }
 
 const CHART = {
   width: 800,
-  padLeft: 34, // room for the temperature axis (ticks + "16°" labels)
-  padRight: 78, // room for two stacked right-side axes: precip mm (inner) and wind km/h (outer)
+  padLeft: 34, // room for the temperature axis (ticks + "25°" labels)
+  padRight: 78, // room for two stacked right-side axes: precip mm (inner) and wind mph (outer)
   topStripHeight: 30, // date, then hour labels
-  plotHeight: 170, // main temp line + precip wash area
-  axisLabelHeight: 30, // wind arrow + speed row at the bottom
+  plotHeight: 170, // condition icons + wind icons + precip wash area, all within this one region
+  axisLabelHeight: 10, // small bottom buffer so icon glyphs at the very bottom of the scale don't clip against the viewBox edge
   windAxisOffset: 40, // how far right of the precip axis the wind axis lane sits
 };
-
-// "Nice" round-number ticks (steps of 1/2/5/10) rather than ticks derived
-// straight from the data's own min/max -- an axis should read in numbers a
-// person would actually think in, not whatever the data happened to span.
-// Shared by the temperature and wind axes, not temperature-specific despite
-// the name history.
-function niceAxisTicks(min, max) {
-  const range = max - min || 1;
-  const rawStep = range / 4;
-  const step = [1, 2, 5, 10].find((s) => s >= rawStep) || 10;
-  const start = Math.ceil(min / step) * step;
-  const ticks = [];
-  for (let t = start; t <= max + 1e-9; t += step) ticks.push(Math.round(t));
-  return ticks;
-}
 
 const CONTEXT_HOURS = 12; // both the chart and the model's data window -- fixed forward-looking span rather than "rest of today", so it behaves the same at 8am and at 11pm
 
@@ -174,32 +164,28 @@ function renderTodayChart(data) {
     return;
   }
 
-  // Axis bounds round to nice numbers rather than hugging the data exactly:
-  // both bottom and top round to the nearest multiple of 10 (floor/ceil
-  // respectively) around the data range (e.g. min 14 -> 10, max 19 -> 20).
-  // Guards against the degenerate case where both round to the same value
-  // (a flat day sitting exactly on a multiple of 10). Apparent temperature
-  // is plotted along its full length (see below), so it always factors
-  // into the range, not just where it happens to diverge.
-  const temps = tempIdxs.map((i) => data.minutely_15.temperature_2m[i]);
-  const apparentTemps = tempIdxs.map((i) => data.minutely_15.apparent_temperature[i]);
-  const rawMin = Math.min(...temps, ...apparentTemps);
-  const rawMax = Math.max(...temps, ...apparentTemps);
-  const min = Math.floor(rawMin / 10) * 10;
-  let max = Math.ceil(rawMax / 10) * 10;
-  if (max <= min) max = min + 10;
-
   const { width, padLeft, padRight, topStripHeight, plotHeight, axisLabelHeight, windAxisOffset } = CHART;
   const plotWidth = width - padLeft - padRight;
   const plotTop = topStripHeight;
   const height = topStripHeight + plotHeight + axisLabelHeight;
+
+  // Lines-as-icons version: no plotted lines at all, just the condition
+  // icon and a rotated wind arrow riding at their own height, so the icon's
+  // extra info (condition variety, wind direction) sits directly on the
+  // value it represents instead of a separate row/line. Both icon strings
+  // share ONE fixed 0-25 scale (temp in C, wind in mph) rather than each
+  // getting its own calibrated range -- deliberately simple for this
+  // version, at the cost of clamping anything outside 0-25 to the edge
+  // (fine for Edinburgh's typical range, not built to handle a heatwave or
+  // a hard frost).
+  const ICON_SCALE_MAX = 25;
+  const iconY = (v) => plotTop + plotHeight - (Math.max(0, Math.min(v, ICON_SCALE_MAX)) / ICON_SCALE_MAX) * plotHeight;
 
   // Temperature (15-min) and precipitation (hourly) are different native
   // resolutions, so they're placed on one shared axis by actual elapsed
   // time rather than by array index -- that's what keeps a 14:15 point on
   // the line lining up under the right third of the 14:00-15:00 bar.
   const xForTime = (t) => padLeft + ((t - now) / spanMs) * plotWidth;
-  const yTemp = (t) => plotTop + plotHeight - ((t - min) / (max - min)) * plotHeight;
 
   // precipitation (mm) at 15-min resolution also describes the *preceding*
   // interval (confirmed against the docs, same convention as the hourly
@@ -210,37 +196,16 @@ function renderTodayChart(data) {
   const points = tempIdxs.map((idx) => ({
     idx,
     x: xForTime(new Date(data.minutely_15.time[idx])),
-    yTemp: yTemp(data.minutely_15.temperature_2m[idx]),
+    yTemp: iconY(data.minutely_15.temperature_2m[idx]),
     temp: data.minutely_15.temperature_2m[idx],
     apparentTemp: data.minutely_15.apparent_temperature[idx],
-    yApparent: yTemp(data.minutely_15.apparent_temperature[idx]),
     time: data.minutely_15.time[idx],
     mm: mmAt(idx),
-    windSpeed: data.minutely_15.wind_speed_10m[idx],
+    windSpeed: data.minutely_15.wind_speed_10m[idx], // mph, see wind_speed_unit in the fetch config
+    yWind: iconY(data.minutely_15.wind_speed_10m[idx]),
     windDir: data.minutely_15.wind_direction_10m[idx],
     code: data.minutely_15.weathercode[idx],
   }));
-
-  const linePath = points.map((p) => `${p.x.toFixed(1)},${p.yTemp.toFixed(1)}`).join(" ");
-
-  // Feels-like plotted the full length of the window as its own dashed
-  // line, same as the actual-temperature line -- the gap between the two
-  // lines is itself the signal, so it should read continuously rather than
-  // appearing and disappearing as it crosses the divergence threshold.
-  const apparentPath = points.map((p) => `${p.x.toFixed(1)},${p.yApparent.toFixed(1)}`).join(" ");
-  const apparentLines = `<polyline points="${apparentPath}" class="chart-line-apparent" fill="none" />`;
-
-  // Wind speed gets its own real axis (see windAxis below) rather than the
-  // earlier self-scaled demo version -- min/max floor/ceil to steps of 5
-  // (wind numbers don't round as cleanly to 10s as temperature does), and
-  // never dips below 0 since speed can't be negative.
-  const windSpeeds = points.map((p) => p.windSpeed);
-  const windMin = Math.max(0, Math.floor(Math.min(...windSpeeds) / 5) * 5);
-  let windMax = Math.ceil(Math.max(...windSpeeds) / 5) * 5;
-  if (windMax <= windMin) windMax = windMin + 5;
-  const yWind = (v) => plotTop + plotHeight - ((v - windMin) / (windMax - windMin)) * plotHeight;
-  const windPath = points.map((p) => `${p.x.toFixed(1)},${yWind(p.windSpeed).toFixed(1)}`).join(" ");
-  const windLine = `<polyline points="${windPath}" class="chart-line-wind" fill="none" />`;
 
   // Hour-mark positions for the bottom axis labels -- just time/x, no
   // probability attached (that field is gone; see the fetch config note).
@@ -290,40 +255,45 @@ function renderTodayChart(data) {
     .map((p) => `<text x="${p.x.toFixed(1)}" y="22" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
     .join("");
 
-  // Icons ride the temperature line (Yr-style), one per 15-min point --
-  // back to full resolution after trying the thinned version.
+  // Condition icons: no line to ride above any more, so positioned to
+  // visually centre the glyph on its actual value height (a small -4
+  // offset, roughly font-size/3, rather than the old -12 that existed
+  // purely to clear the now-removed line).
   const conditionIcons = points
     .map((p) => {
       const icon = describeCode(p.code)[1];
-      const y = Math.max(p.yTemp - 12, 10);
+      const y = Math.max(p.yTemp - 4, 10);
       return `<text x="${p.x.toFixed(1)}" y="${y.toFixed(1)}" class="chart-icon-label" text-anchor="middle">${icon}</text>`;
     })
     .join("");
 
-  // Wind row: arrow (direction) + speed number, back at the bottom -- after
-  // trying a single size-scaled glyph, the explicit number reads clearer.
+  // Wind icons: a rotated arrow riding at the wind-speed height on the
+  // shared 0-25 scale, replacing both the old fixed-height arrow+number row
+  // and the dashed wind line -- direction is the icon's own "extra info"
+  // (via rotation), speed is read from its height against the wind axis,
+  // same relationship the condition icons have with the temperature axis.
   // Arrow points in the direction wind is blowing *toward* (direction+180,
   // since wind_direction_10m is meteorological convention -- the direction
   // it's blowing *from*).
-  const windRow = points
+  const windIcons = points
     .map((p) => {
       const rotation = (p.windDir + 180) % 360;
-      const y1 = plotTop + plotHeight + 12;
-      const y2 = plotTop + plotHeight + 24;
-      return (
-        `<text x="${p.x.toFixed(1)}" y="${y1.toFixed(1)}" class="chart-wind-arrow" text-anchor="middle" transform="rotate(${rotation.toFixed(0)}, ${p.x.toFixed(1)}, ${(y1 - 3).toFixed(1)})">&uarr;</text>` +
-        `<text x="${p.x.toFixed(1)}" y="${y2.toFixed(1)}" class="chart-wind-speed" text-anchor="middle">${Math.round(p.windSpeed)}</text>`
-      );
+      const y = Math.max(p.yWind - 4, 10);
+      return `<text x="${p.x.toFixed(1)}" y="${y.toFixed(1)}" class="chart-wind-arrow" text-anchor="middle" transform="rotate(${rotation.toFixed(0)}, ${p.x.toFixed(1)}, ${(y - 3).toFixed(1)})">&uarr;</text>`;
     })
     .join("");
 
-  // Temperature axis (left): "nice" round-number ticks, not raw data
-  // extremes. Precip axis (right): fixed mm ticks matching HEIGHT_MAX_MM --
-  // that's what bar *height* now encodes; type (colour) isn't positional,
-  // so it doesn't need an axis.
-  const tempAxis = niceAxisTicks(min, max)
+  // Temperature axis (left) and wind axis (right, outer lane): both read
+  // off the same fixed 0-25 scale as the icons themselves, in their own
+  // units (C / mph) -- a tick at the same height means "25" on both sides,
+  // just two different quantities sharing one physical scale for this
+  // version. Precip axis (inner right lane) is unrelated and keeps its own
+  // fixed mm ticks matching HEIGHT_MAX_MM, since that's what bar height
+  // encodes.
+  const ICON_AXIS_TICKS = [0, 5, 10, 15, 20, 25];
+  const tempAxis = ICON_AXIS_TICKS
     .map((tv) => {
-      const ty = yTemp(tv);
+      const ty = iconY(tv);
       return (
         `<line x1="${(padLeft - 4).toFixed(1)}" x2="${padLeft}" y1="${ty.toFixed(1)}" y2="${ty.toFixed(1)}" class="axis-tick" />` +
         `<text x="${(padLeft - 7).toFixed(1)}" y="${(ty + 3).toFixed(1)}" class="axis-tick-label" text-anchor="end">${tv}&deg;</text>`
@@ -343,27 +313,24 @@ function renderTodayChart(data) {
     .join("");
 
   // Wind axis: a second, further-out right-side lane, coloured to match the
-  // wind line so it reads as "this axis belongs to that line" rather than
-  // just more numbers next to the precip ones.
-  const windAxis = niceAxisTicks(windMin, windMax)
+  // wind icons so it reads as "this axis belongs to those" rather than just
+  // more numbers next to the precip ones.
+  const windAxis = ICON_AXIS_TICKS
     .map((tv) => {
-      const ty = yWind(tv);
+      const ty = iconY(tv);
       const xWind = padLeft + plotWidth + windAxisOffset;
       return (
         `<line x1="${xWind}" x2="${(xWind + 4).toFixed(1)}" y1="${ty.toFixed(1)}" y2="${ty.toFixed(1)}" class="axis-tick-wind" />` +
-        `<text x="${(xWind + 7).toFixed(1)}" y="${(ty + 3).toFixed(1)}" class="axis-tick-label-wind" text-anchor="start">${tv}km/h</text>`
+        `<text x="${(xWind + 7).toFixed(1)}" y="${(ty + 3).toFixed(1)}" class="axis-tick-label-wind" text-anchor="start">${tv}mph</text>`
       );
     })
     .join("");
 
   wrap.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature, feels-like temperature, rainfall, and wind speed for the next ${CONTEXT_HOURS} hours">
+    <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature and wind speed as icons, plus rainfall, for the next ${CONTEXT_HOURS} hours">
       <g class="precip-band">${bars}</g>
-      <polyline points="${linePath}" class="chart-line" fill="none" />
-      ${apparentLines}
-      ${windLine}
       ${conditionIcons}
-      ${windRow}
+      ${windIcons}
       ${dateLabel}
       ${hourLabels}
       ${tempAxis}
@@ -416,7 +383,7 @@ function attachChartHover(wrap, points) {
     const feelsLike = Math.abs(p.apparentTemp - p.temp) >= APPARENT_TEMP_GAP
       ? ` (feels ${Math.round(p.apparentTemp)}&deg;)`
       : "";
-    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong>${feelsLike} at ${formatHour(p.time)}<br>${p.mm.toFixed(1)}mm &middot; ${icon} ${desc.toLowerCase()}<br>${Math.round(p.windSpeed)}km/h from ${compassLabel(p.windDir)}`;
+    tooltip.innerHTML = `<strong>${Math.round(p.temp * 10) / 10}&deg;C</strong>${feelsLike} at ${formatHour(p.time)}<br>${p.mm.toFixed(1)}mm &middot; ${icon} ${desc.toLowerCase()}<br>${Math.round(p.windSpeed)}mph from ${compassLabel(p.windDir)}`;
     tooltip.classList.add("visible");
 
     const screenX = rect.left + p.x / scale;
@@ -519,11 +486,11 @@ function lookupWeatherData(data, categories) {
     temperature: () => `Temperature next ${CONTEXT_HOURS}h (15-min, HH:MM=C): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${data.minutely_15.temperature_2m[i].toFixed(1)}`).join(",")}`,
     apparent_temperature: () => `Feels-like temperature (wind chill/heat index combined) next ${CONTEXT_HOURS}h (15-min, HH:MM=C): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${data.minutely_15.apparent_temperature[i].toFixed(1)}`).join(",")}`,
     rain: () => `Rain amount next ${CONTEXT_HOURS}h (15-min mm, HH:MM=mm): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${(data.minutely_15.precipitation[i + 1] ?? 0).toFixed(1)}`).join(",")}`,
-    wind: () => `Wind next ${CONTEXT_HOURS}h (15-min, HH:MM=km/h+direction): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${Math.round(data.minutely_15.wind_speed_10m[i])}${compassLabel(data.minutely_15.wind_direction_10m[i])}`).join(",")}`,
+    wind: () => `Wind next ${CONTEXT_HOURS}h (15-min, HH:MM=mph+direction): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${Math.round(data.minutely_15.wind_speed_10m[i])}${compassLabel(data.minutely_15.wind_direction_10m[i])}`).join(",")}`,
     // wind_gusts_10m is a preceding-hour max, same convention precipitation_
     // probability had -- shifted back one position so the reading lines up
     // with the hour it's actually in force for, not the hour it's filed under.
-    gusts: () => `Wind gusts next ${CONTEXT_HOURS}h (hourly peak km/h, HH:MM=km/h): ${idxsHourly.map((i) => `${formatHour(data.hourly.time[i])}=${Math.round(data.hourly.wind_gusts_10m[i + 1])}`).join(",")}`,
+    gusts: () => `Wind gusts next ${CONTEXT_HOURS}h (hourly peak mph, HH:MM=mph): ${idxsHourly.map((i) => `${formatHour(data.hourly.time[i])}=${Math.round(data.hourly.wind_gusts_10m[i + 1])}`).join(",")}`,
     // weathercode lives on minutely_15 (see fetch config) -- kept at hourly
     // cadence here to match the on-the-hour marks the other hourly field uses.
     conditions: () => `Conditions next ${CONTEXT_HOURS}h (hourly, HH:MM=type): ${idxsHourly.map((i) => { const mIdx = data.minutely_15.time.indexOf(data.hourly.time[i]); return `${formatHour(data.hourly.time[i])}=${conditionLabel(data.minutely_15.weathercode[mIdx])}`; }).join(",")}`,
@@ -531,7 +498,7 @@ function lookupWeatherData(data, categories) {
 
   const currentGap = data.current.apparent_temperature - data.current.temperature_2m;
   const feelsLikeNote = Math.abs(currentGap) >= APPARENT_TEMP_GAP ? ` (feels ${data.current.apparent_temperature.toFixed(1)}C)` : "";
-  const lines = [`Current: ${data.current.temperature_2m.toFixed(1)}C${feelsLikeNote}, ${desc.toLowerCase()}, wind ${Math.round(data.current.wind_speed_10m)}km/h.`];
+  const lines = [`Current: ${data.current.temperature_2m.toFixed(1)}C${feelsLikeNote}, ${desc.toLowerCase()}, wind ${Math.round(data.current.wind_speed_10m)}mph.`];
   categories.forEach((c) => { if (builders[c]) lines.push(builders[c]()); });
   return lines.join("\n");
 }

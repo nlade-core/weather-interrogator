@@ -85,28 +85,6 @@ main {
 
 .chart-svg { width: 100%; height: auto; }
 
-.chart-line {
-  stroke: var(--temp);
-  stroke-width: 2;
-  stroke-linejoin: round;
-  stroke-linecap: round;
-}
-
-.chart-line-apparent {
-  stroke: var(--muted);
-  stroke-width: 1.5;
-  stroke-dasharray: 4 3;
-  stroke-linejoin: round;
-  stroke-linecap: round;
-}
-
-.chart-line-wind {
-  stroke: var(--accent);
-  stroke-width: 1.5;
-  stroke-dasharray: 1 3;
-  stroke-linecap: round;
-}
-
 .chart-axis-label {
   fill: var(--muted);
   font-size: 10px;
@@ -114,15 +92,14 @@ main {
 
 .chart-icon-label { font-size: 12px; text-anchor: middle; }
 
+/* Now a floating icon riding the wind-speed height (see windIcons in
+   app.js), not a small fixed annotation under a line -- sized up to read
+   as one of the two primary icon series, matching .chart-icon-label's
+   visual weight rather than a caption. */
 .chart-wind-arrow {
   fill: var(--accent);
-  font-size: 9px;
+  font-size: 14px;
   font-weight: 700;
-}
-
-.chart-wind-speed {
-  fill: var(--muted);
-  font-size: 8px;
 }
 
 .axis-tick { stroke: var(--border); stroke-width: 1; }
@@ -132,8 +109,8 @@ main {
   font-size: 9px;
 }
 
-/* Coloured to match .chart-line-wind so the axis visibly belongs to that
-   line, not just more numbers next to the precip axis beside it. */
+/* Coloured to match .chart-wind-arrow so the axis visibly belongs to those
+   icons, not just more numbers next to the precip axis beside it. */
 .axis-tick-wind { stroke: var(--accent); stroke-width: 1; opacity: 0.6; }
 
 .axis-tick-label-wind {
