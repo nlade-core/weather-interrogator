@@ -186,6 +186,28 @@ main {
   border-radius: 6px;
   padding: 0.75rem;
   text-align: center;
+  position: relative;
+}
+
+/* Dashed rather than solid border -- a genuinely different, coarser data
+   source than today/tomorrow's UKV cards, not the same quality guarantee
+   at equal visual weight. */
+.daily-card-extended { border-style: dashed; }
+
+/* Normal flow, not absolutely positioned -- a corner badge collided with
+   the date label underneath it for longer date strings ("Wed 9 Sept"),
+   covering part of the text. Sitting above the label in its own line
+   can't collide regardless of how long that text is. */
+.daily-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 0.1rem 0.3rem;
+  margin-bottom: 0.4rem;
 }
 
 .daily-label {

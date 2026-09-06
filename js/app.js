@@ -63,6 +63,28 @@ function buildForecastUrl(location) {
   return url;
 }
 
+// Separate, independent fetch for days beyond what UKV can reach -- no
+// models pin, so this is best_match's own blend, which for a UK location
+// falls back to a coarser global model past UKV's ~2-day range (confirmed
+// empirically: best_match's own first two days come back byte-identical
+// to the UKV-pinned fetch's, so there's no discrepancy where they
+// overlap -- only the days UKV genuinely can't reach add anything new).
+// forecast_days=7 chosen deliberately short of best_match's actual real
+// range (confirmed non-null out to 15 days) -- a 10-15 day forecast is
+// real data but not a claim this app wants to make about accuracy that
+// far out.
+function buildExtendedDailyUrl(location) {
+  const url = new URL("https://api.open-meteo.com/v1/forecast");
+  url.search = new URLSearchParams({
+    latitude: location.latitude,
+    longitude: location.longitude,
+    timezone: "auto",
+    forecast_days: "7",
+    daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum",
+  });
+  return url;
+}
+
 // Below this gap, actual and feels-like are close enough that showing both
 // is just visual/textual noise -- the dashed apparent-temp line only draws
 // where segments exceed it, and the tooltip/current-card only mention
@@ -564,10 +586,30 @@ function getChartTooltip() {
   return tooltip;
 }
 
-// Only today/tomorrow: UKV comes back null past day 2 (confirmed via a
-// real request, not assumed), so a day with no weather_code is skipped
-// rather than shown as a blank/broken card.
-function renderDailySummary(data) {
+function dailyCardHtml(label, code, hi, lo, rain, extended) {
+  if (code == null) return "";
+  const [desc, icon] = describeCode(code);
+  const rainNote = rain >= 0.1 ? `<div class="daily-rain">${rain.toFixed(1)}mm</div>` : "";
+  return `
+    <div class="daily-card${extended ? " daily-card-extended" : ""}">
+      ${extended ? `<div class="daily-badge">estimate</div>` : ""}
+      <div class="daily-label">${label}</div>
+      <div class="daily-icon">${icon}</div>
+      <div class="daily-range"><strong>${Math.round(hi)}&deg;</strong> / ${Math.round(lo)}&deg;</div>
+      <div class="daily-desc">${desc}</div>
+      ${rainNote}
+    </div>`;
+}
+
+// Today/tomorrow come from the main UKV-pinned fetch, unchanged from
+// before (UKV comes back null past day 2, confirmed via a real request,
+// not assumed -- a day with no weather_code is skipped rather than shown
+// as a blank/broken card). Days beyond that, if extendedData was fetched
+// successfully, come from a separate best_match request and are marked
+// "estimate" -- a genuinely different, coarser source past UKV's range,
+// not the same 2km guarantee, so it says so rather than presenting both
+// at equal visual weight.
+function renderDailySummary(data, extendedData) {
   const container = document.getElementById("daily-summary");
   // Located by matching today's actual date, not assumed to be index 0 --
   // past_days (added for the chart's recent-past context) prepends a day
@@ -577,26 +619,30 @@ function renderDailySummary(data) {
   const todayStr = data.current.time.slice(0, 10);
   const todayIdx = Math.max(0, data.daily.time.indexOf(todayStr));
   const labels = ["Today", "Tomorrow"];
-  const cards = data.daily.time
+  let cards = data.daily.time
     .slice(todayIdx)
     .map((date, i) => {
       const j = todayIdx + i;
-      if (data.daily.weather_code[j] == null) return "";
-      const [desc, icon] = describeCode(data.daily.weather_code[j]);
-      const hi = Math.round(data.daily.temperature_2m_max[j]);
-      const lo = Math.round(data.daily.temperature_2m_min[j]);
-      const rain = data.daily.precipitation_sum[j];
-      const rainNote = rain >= 0.1 ? `<div class="daily-rain">${rain.toFixed(1)}mm</div>` : "";
-      return `
-        <div class="daily-card">
-          <div class="daily-label">${labels[i] ?? formatDayMonth(date)}</div>
-          <div class="daily-icon">${icon}</div>
-          <div class="daily-range"><strong>${hi}&deg;</strong> / ${lo}&deg;</div>
-          <div class="daily-desc">${desc}</div>
-          ${rainNote}
-        </div>`;
+      return dailyCardHtml(labels[i] ?? formatDayMonth(date), data.daily.weather_code[j], data.daily.temperature_2m_max[j], data.daily.temperature_2m_min[j], data.daily.precipitation_sum[j], false);
     })
     .join("");
+
+  if (extendedData) {
+    const extTodayIdx = Math.max(0, extendedData.daily.time.indexOf(todayStr));
+    // "Estimate" styling only means something when today/tomorrow actually
+    // came from UKV -- for a non-UK location, buildForecastUrl never pins
+    // a model at all, so the main fetch's daily block is already
+    // best_match, identical in kind to these extra days. Marking them
+    // differently there would imply a quality gap that doesn't exist.
+    cards += extendedData.daily.time
+      .slice(extTodayIdx + 2) // skip today/tomorrow -- already shown above, confirmed identical to the main fetch where they overlap (for UK locations; for non-UK both fetches are best_match anyway)
+      .map((date, i) => {
+        const j = extTodayIdx + 2 + i;
+        return dailyCardHtml(formatDayMonth(date), extendedData.daily.weather_code[j], extendedData.daily.temperature_2m_max[j], extendedData.daily.temperature_2m_min[j], extendedData.daily.precipitation_sum[j], LOCATION.isUK);
+      })
+      .join("");
+  }
+
   container.innerHTML = cards || `<p class="chart-empty">No further-day data available right now.</p>`;
 }
 
@@ -629,8 +675,8 @@ async function geocodeLocation(query) {
 function setLocationCopy() {
   document.getElementById("subtitle").textContent = `Short-term forecast for ${LOCATION.name}, pulled straight from Open-Meteo.`;
   document.getElementById("daily-note").innerHTML = LOCATION.isUK
-    ? `UKV (the 2km model everything else on this page uses) only forecasts about 2 days out &mdash; further than that would mean mixing in a lower-resolution global model, the same resolution mismatch this project already dropped <code>precipitation_probability</code> over. So: today and tomorrow, not a fabricated week.`
-    : `${LOCATION.name} is outside the UK, so this uses Open-Meteo's <code>best_match</code> model rather than the UK-specific 2km UKV model this page uses for UK locations &mdash; a coarser global model, not the same resolution or quality guarantee.`;
+    ? `UKV (the 2km model everything else on this page uses) only forecasts about 2 days out. Today and tomorrow (solid border) use it directly. The dashed "estimate" days beyond that switch to a coarser global model &mdash; real forecast data, not fabricated, but not the same 2km precision or the same confidence.`
+    : `${LOCATION.name} is outside the UK, so this uses Open-Meteo's <code>best_match</code> model rather than the UK-specific 2km UKV model this page uses for UK locations &mdash; a coarser global model, not the same resolution or quality guarantee. Every day shown, including today, comes from that same source, so none of them get the dashed "estimate" treatment UK locations see beyond day 2 &mdash; there's no split in quality to mark here.`;
 }
 
 function setupLocationPicker() {
@@ -685,6 +731,18 @@ async function loadForecast() {
     renderCurrent(data);
     renderTodayChart(data);
     renderDailySummary(data);
+
+    // Independent of the main fetch -- a failure here shouldn't break
+    // anything else on the page, it just means the extended days don't
+    // show up and today/tomorrow render on their own, same as before this
+    // was added.
+    try {
+      const extRes = await fetch(buildExtendedDailyUrl(LOCATION));
+      if (extRes.ok) renderDailySummary(data, await extRes.json());
+    } catch {
+      // Extended days are a nice-to-have, not core -- silently keep the
+      // today/tomorrow-only render already in place.
+    }
 
     statusEl.textContent = `Updated ${new Date().toLocaleTimeString("en-GB")} — ${LOCATION.name} (${data.latitude.toFixed(2)}, ${data.longitude.toFixed(2)})`;
     return data;
