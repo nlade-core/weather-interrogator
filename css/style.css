@@ -266,6 +266,17 @@ main {
 
 .hover-dot.visible { opacity: 1; }
 
+.hover-dot-wind {
+  fill: var(--bg);
+  stroke: var(--accent);
+  stroke-width: 2;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+}
+
+.hover-dot-wind.visible { opacity: 1; }
+
 .chart-hit-area { cursor: crosshair; }
 
 .chart-tooltip {

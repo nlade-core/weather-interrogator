@@ -183,13 +183,14 @@ function renderCurrent(data) {
 }
 
 const CHART = {
-  width: 800,
-  padLeft: 34, // room for the temperature axis (ticks + "25°" labels)
-  padRight: 78, // room for two stacked right-side axes: precip mm (inner) and wind mph (outer)
-  topStripHeight: 30, // date, then hour labels
-  plotHeight: 170, // condition icons + wind icons + precip wash area, all within this one region
-  axisLabelHeight: 10, // small bottom buffer so icon glyphs at the very bottom of the scale don't clip against the viewBox edge
-  windAxisOffset: 40, // how far right of the precip axis the wind axis lane sits
+  width: 760,
+  padLeft: 44, // room for each graph's own left-side axis (temp "20°"; wind ticks are bare numbers with one "mph" label, but still need more room than "°" alone)
+  padRight: 38, // room for the precip mm axis -- the temp graph's only right-side lane now that wind has its own graph and left axis
+  topStripHeight: 30, // date, then hour labels -- shared by both stacked graphs, they share one time axis
+  tempPlotHeight: 130, // temperature icons + precip wash
+  plotGap: 24, // breathing room between the two stacked graphs
+  windPlotHeight: 90, // wind icons, smaller than the temp graph since it's the secondary series
+  axisLabelHeight: 10, // small bottom buffer so icon glyphs at the very bottom of a scale don't clip against the viewBox edge
 };
 
 const CONTEXT_HOURS = 12; // the model's data window (Ask/LLM) AND the chart's forward span -- fixed forward-looking span rather than "rest of today", so it behaves the same at 8am and at 11pm. Deliberately forward-only for Ask, per the recent-past scoping note: that's a later addition, not this one.
@@ -235,22 +236,32 @@ function renderTodayChart(data) {
     return;
   }
 
-  const { width, padLeft, padRight, topStripHeight, plotHeight, axisLabelHeight, windAxisOffset } = CHART;
+  const { width, padLeft, padRight, topStripHeight, tempPlotHeight, plotGap, windPlotHeight, axisLabelHeight } = CHART;
   const plotWidth = width - padLeft - padRight;
-  const plotTop = topStripHeight;
-  const height = topStripHeight + plotHeight + axisLabelHeight;
+  const tempPlotTop = topStripHeight;
+  const windPlotTop = tempPlotTop + tempPlotHeight + plotGap;
+  const height = windPlotTop + windPlotHeight + axisLabelHeight;
 
-  // Lines-as-icons version: no plotted lines at all, just the condition
-  // icon and a rotated wind arrow riding at their own height, so the icon's
-  // extra info (condition variety, wind direction) sits directly on the
-  // value it represents instead of a separate row/line. Both icon strings
-  // share ONE fixed 0-25 scale (temp in C, wind in mph) rather than each
-  // getting its own calibrated range -- deliberately simple for this
-  // version, at the cost of clamping anything outside 0-25 to the edge
-  // (fine for Edinburgh's typical range, not built to handle a heatwave or
-  // a hard frost).
-  const ICON_SCALE_MAX = 25;
-  const iconY = (v) => plotTop + plotHeight - (Math.max(0, Math.min(v, ICON_SCALE_MAX)) / ICON_SCALE_MAX) * plotHeight;
+  // Temperature and wind split into two stacked graphs, each with its own
+  // sensibly-calibrated scale, rather than sharing one fixed 0-25 range --
+  // a shared scale meant "25" on the axis had to mean both 25C and 25mph
+  // at the same height, which doesn't generalise well and was always a
+  // deliberately-simple placeholder. Temperature rounds to the nearest 5
+  // above/below the actual data range (e.g. min 12 -> 10, max 19 -> 20);
+  // wind is always floored at 0 (speed can't be negative) with a ceiling
+  // rounded up to the nearest 5 above the max. Icons still carry their own
+  // "extra info" (condition variety, wind direction via rotation) exactly
+  // as before -- only the vertical scale changed, not that design.
+  const rawTemps = tempIdxs.map((idx) => data.minutely_15.temperature_2m[idx]);
+  const tMin = Math.floor(Math.min(...rawTemps) / 5) * 5;
+  let tMax = Math.ceil(Math.max(...rawTemps) / 5) * 5;
+  if (tMax <= tMin) tMax = tMin + 5;
+  const iconYTemp = (v) => tempPlotTop + tempPlotHeight - ((Math.max(tMin, Math.min(v, tMax)) - tMin) / (tMax - tMin)) * tempPlotHeight;
+
+  const rawWinds = tempIdxs.map((idx) => data.minutely_15.wind_speed_10m[idx]);
+  let wMax = Math.ceil(Math.max(...rawWinds) / 5) * 5;
+  if (wMax < 5) wMax = 5;
+  const iconYWind = (v) => windPlotTop + windPlotHeight - (Math.max(0, Math.min(v, wMax)) / wMax) * windPlotHeight;
 
   // Temperature (15-min) and precipitation (hourly) are different native
   // resolutions, so they're placed on one shared axis by actual elapsed
@@ -272,14 +283,14 @@ function renderTodayChart(data) {
     return {
       idx,
       x: xForTime(new Date(time)),
-      yTemp: iconY(data.minutely_15.temperature_2m[idx]),
+      yTemp: iconYTemp(data.minutely_15.temperature_2m[idx]),
       temp: data.minutely_15.temperature_2m[idx],
       apparentTemp: data.minutely_15.apparent_temperature[idx],
       time,
       isPast: new Date(time) < now, // recent-past trailing context -- rendered de-emphasised, not mistaken for more forecast
       mm: mmAt(idx),
       windSpeed: data.minutely_15.wind_speed_10m[idx], // mph, see wind_speed_unit in the fetch config
-      yWind: iconY(data.minutely_15.wind_speed_10m[idx]),
+      yWind: iconYWind(data.minutely_15.wind_speed_10m[idx]),
       windDir: data.minutely_15.wind_direction_10m[idx],
       code: data.minutely_15.weathercode[idx],
     };
@@ -292,12 +303,14 @@ function renderTodayChart(data) {
     return { x: xForTime(new Date(time)), time, isPast: new Date(time) < now };
   });
 
-  // Night band: a shaded background for is_day === 0 stretches, drawn
-  // first so it paints behind the precip wash and both icon rows -- pure
-  // background context, not a data series competing for attention.
-  // Band edges sit at the midpoint between the last/first samples either
-  // side of a transition rather than snapping to a sample point, since
-  // is_day flips somewhere between two 15-min readings, not exactly on one.
+  // Night band: a shaded background for is_day === 0 stretches, drawn on
+  // BOTH stacked graphs (they share the same time axis, so "is it dark
+  // right now" applies to both) first so it paints behind the precip wash
+  // and both icon rows -- pure background context, not a data series
+  // competing for attention. Band edges sit at the midpoint between the
+  // last/first samples either side of a transition rather than snapping to
+  // a sample point, since is_day flips somewhere between two 15-min
+  // readings, not exactly on one.
   const nightBands = [];
   let nightStart = null;
   points.forEach((p, i) => {
@@ -311,9 +324,22 @@ function renderTodayChart(data) {
   });
   if (nightStart !== null) nightBands.push([nightStart, padLeft + plotWidth]);
   const nightRects = nightBands
-    .map(([x1, x2]) => `<rect x="${x1.toFixed(1)}" y="${plotTop}" width="${(x2 - x1).toFixed(1)}" height="${plotHeight}" class="chart-night-band" />`)
+    .map(
+      ([x1, x2]) =>
+        `<rect x="${x1.toFixed(1)}" y="${tempPlotTop}" width="${(x2 - x1).toFixed(1)}" height="${tempPlotHeight}" class="chart-night-band" />` +
+        `<rect x="${x1.toFixed(1)}" y="${windPlotTop}" width="${(x2 - x1).toFixed(1)}" height="${windPlotHeight}" class="chart-night-band" />`
+    )
     .join("");
 
+  // Rain stays a wash behind the temperature graph rather than getting its
+  // own third stacked graph or moving to the wind graph -- temp+rain is the
+  // pairing that actually answers "what to wear, is it worth going out",
+  // the Apple-Weather-style pairing this chart started from; wind is more
+  // often a secondary factor (confirmed by the dominant-factor heuristic
+  // elsewhere on this page, which only surfaces wind as the headline some
+  // of the time). Worth revisiting as its own graph later if this reads as
+  // cluttered once wind isn't sharing the same vertical space any more.
+  //
   // Bar height is predicted amount (mm) directly rather than probability --
   // probability isn't fetched at all now (pinned to the UKV model, which
   // can't produce it; see the fetch config note). Amount is real UKV data,
@@ -328,8 +354,8 @@ function renderTodayChart(data) {
   const barWidth = Math.max((quarterMs / spanMs) * plotWidth * 0.82, 3);
   const barFor = (p) => {
     const family = precipFamily(p.code);
-    const barHeight = Math.min(p.mm / HEIGHT_MAX_MM, 1) * plotHeight;
-    const y = plotTop + plotHeight - barHeight;
+    const barHeight = Math.min(p.mm / HEIGHT_MAX_MM, 1) * tempPlotHeight;
+    const y = tempPlotTop + tempPlotHeight - barHeight;
     return `<rect x="${(p.x - barWidth / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="1.5" class="precip-bar precip-${family}"><title>${formatHour(p.time)} — ${p.mm.toFixed(1)}mm, ${describeCode(p.code)[0].toLowerCase()}</title></rect>`;
   };
   // Past bars wrapped in their own <g> rather than adding a .chart-past
@@ -394,23 +420,21 @@ function renderTodayChart(data) {
     })
     .join("");
 
-  // "Now" marker: with a past window as well as a forward one, now is no
-  // longer always the left edge, so it needs its own always-visible line --
-  // the existing hover-guide only appears on interaction, which isn't the
-  // same thing.
-  const nowMarker = `<line x1="${nowX.toFixed(1)}" x2="${nowX.toFixed(1)}" y1="${plotTop}" y2="${plotTop + plotHeight}" class="chart-now-marker" /><text x="${nowX.toFixed(1)}" y="${(plotTop + 9).toFixed(1)}" class="chart-now-label" text-anchor="middle">now</text>`;
+  // "Now" marker: one continuous line spanning both stacked graphs (and
+  // the gap between them), not two separate ones -- reads as a single
+  // synchronised instant applying to both panels, the usual convention for
+  // a shared-x-axis multi-panel chart. Label sits once, near the top.
+  const nowMarker = `<line x1="${nowX.toFixed(1)}" x2="${nowX.toFixed(1)}" y1="${tempPlotTop}" y2="${windPlotTop + windPlotHeight}" class="chart-now-marker" /><text x="${nowX.toFixed(1)}" y="${(tempPlotTop + 9).toFixed(1)}" class="chart-now-label" text-anchor="middle">now</text>`;
 
-  // Temperature axis (left) and wind axis (right, outer lane): both read
-  // off the same fixed 0-25 scale as the icons themselves, in their own
-  // units (C / mph) -- a tick at the same height means "25" on both sides,
-  // just two different quantities sharing one physical scale for this
-  // version. Precip axis (inner right lane) is unrelated and keeps its own
-  // fixed mm ticks matching HEIGHT_MAX_MM, since that's what bar height
-  // encodes.
-  const ICON_AXIS_TICKS = [0, 5, 10, 15, 20, 25];
-  const tempAxis = ICON_AXIS_TICKS
+  // Temperature axis (left, on the temp graph): "nice" round-number ticks
+  // in steps of 5 across [tMin, tMax]. Precip axis (right, also on the temp
+  // graph): unrelated fixed mm ticks matching HEIGHT_MAX_MM, since that's
+  // what bar height encodes.
+  const tempAxisTicks = [];
+  for (let t = tMin; t <= tMax; t += 5) tempAxisTicks.push(t);
+  const tempAxis = tempAxisTicks
     .map((tv) => {
-      const ty = iconY(tv);
+      const ty = iconYTemp(tv);
       return (
         `<line x1="${(padLeft - 4).toFixed(1)}" x2="${padLeft}" y1="${ty.toFixed(1)}" y2="${ty.toFixed(1)}" class="axis-tick" />` +
         `<text x="${(padLeft - 7).toFixed(1)}" y="${(ty + 3).toFixed(1)}" class="axis-tick-label" text-anchor="end">${tv}&deg;</text>`
@@ -420,7 +444,7 @@ function renderTodayChart(data) {
 
   const precipAxis = [0, 1, 2, 3]
     .map((tv) => {
-      const ty = plotTop + plotHeight - (tv / HEIGHT_MAX_MM) * plotHeight;
+      const ty = tempPlotTop + tempPlotHeight - (tv / HEIGHT_MAX_MM) * tempPlotHeight;
       const xRight = padLeft + plotWidth;
       return (
         `<line x1="${xRight}" x2="${(xRight + 4).toFixed(1)}" y1="${ty.toFixed(1)}" y2="${ty.toFixed(1)}" class="axis-tick" />` +
@@ -429,22 +453,30 @@ function renderTodayChart(data) {
     })
     .join("");
 
-  // Wind axis: a second, further-out right-side lane, coloured to match the
-  // wind icons so it reads as "this axis belongs to those" rather than just
-  // more numbers next to the precip ones.
-  const windAxis = ICON_AXIS_TICKS
-    .map((tv) => {
-      const ty = iconY(tv);
-      const xWind = padLeft + plotWidth + windAxisOffset;
-      return (
-        `<line x1="${xWind}" x2="${(xWind + 4).toFixed(1)}" y1="${ty.toFixed(1)}" y2="${ty.toFixed(1)}" class="axis-tick-wind" />` +
-        `<text x="${(xWind + 7).toFixed(1)}" y="${(ty + 3).toFixed(1)}" class="axis-tick-label-wind" text-anchor="start">${tv}mph</text>`
-      );
-    })
-    .join("");
+  // Wind axis: left side of the wind graph, same position convention as
+  // the temp axis now that wind has its own graph rather than sharing
+  // vertical space (and a squeezed outer right-hand lane) with precip.
+  // Coloured to match the wind icons so it visibly belongs to that graph.
+  // Ticks are bare numbers rather than repeating "mph" on every one (that
+  // clipped against the SVG's own left edge at this padLeft -- "20mph" is
+  // a lot wider than the temp axis's "20°"); one small unit label sits
+  // above the top tick instead.
+  const windAxisTicks = [];
+  for (let t = 0; t <= wMax; t += 5) windAxisTicks.push(t);
+  const windAxis =
+    `<text x="${(padLeft - 4).toFixed(1)}" y="${(windPlotTop - 4).toFixed(1)}" class="axis-tick-label-wind" text-anchor="end">mph</text>` +
+    windAxisTicks
+      .map((tv) => {
+        const ty = iconYWind(tv);
+        return (
+          `<line x1="${(padLeft - 4).toFixed(1)}" x2="${padLeft}" y1="${ty.toFixed(1)}" y2="${ty.toFixed(1)}" class="axis-tick-wind" />` +
+          `<text x="${(padLeft - 7).toFixed(1)}" y="${(ty + 3).toFixed(1)}" class="axis-tick-label-wind" text-anchor="end">${tv}</text>`
+        );
+      })
+      .join("");
 
   wrap.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature and wind speed as icons, plus rainfall, for the last ${PAST_HOURS} hours and the next ${CONTEXT_HOURS} hours">
+    <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Temperature and rainfall, and wind speed as a separate graph below, for the last ${PAST_HOURS} hours and the next ${CONTEXT_HOURS} hours">
       ${nightRects}
       <g class="precip-band">${bars}</g>
       ${conditionIcons}
@@ -455,9 +487,10 @@ function renderTodayChart(data) {
       ${tempAxis}
       ${precipAxis}
       ${windAxis}
-      <line class="hover-guide" x1="0" x2="0" y1="${plotTop}" y2="${plotTop + plotHeight}" />
+      <line class="hover-guide" x1="0" x2="0" y1="${tempPlotTop}" y2="${windPlotTop + windPlotHeight}" />
       <circle class="hover-dot" r="5" cx="0" cy="0" />
-      <rect class="chart-hit-area" x="${padLeft}" y="${plotTop}" width="${plotWidth}" height="${plotHeight}" fill="transparent" />
+      <circle class="hover-dot-wind" r="5" cx="0" cy="0" />
+      <rect class="chart-hit-area" x="${padLeft}" y="${tempPlotTop}" width="${plotWidth}" height="${windPlotTop + windPlotHeight - tempPlotTop}" fill="transparent" />
     </svg>
   `;
 
@@ -504,6 +537,7 @@ function attachChartHover(wrap, points) {
   const svg = wrap.querySelector(".chart-svg");
   const guide = svg.querySelector(".hover-guide");
   const hoverDot = svg.querySelector(".hover-dot");
+  const hoverDotWind = svg.querySelector(".hover-dot-wind");
   const hitArea = svg.querySelector(".chart-hit-area");
   const tooltip = getChartTooltip();
 
@@ -535,6 +569,10 @@ function attachChartHover(wrap, points) {
     hoverDot.setAttribute("cy", p.yTemp);
     hoverDot.classList.add("visible");
 
+    hoverDotWind.setAttribute("cx", p.x);
+    hoverDotWind.setAttribute("cy", p.yWind);
+    hoverDotWind.classList.add("visible");
+
     const feelsLike = Math.abs(p.apparentTemp - p.temp) >= APPARENT_TEMP_GAP
       ? ` (feels ${Math.round(p.apparentTemp)}&deg;)`
       : "";
@@ -551,6 +589,7 @@ function attachChartHover(wrap, points) {
   function hide() {
     guide.classList.remove("visible");
     hoverDot.classList.remove("visible");
+    hoverDotWind.classList.remove("visible");
     tooltip.classList.remove("visible");
   }
 
