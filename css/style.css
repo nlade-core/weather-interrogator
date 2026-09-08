@@ -173,60 +173,6 @@ main {
 
 .chart-empty { color: var(--muted); font-size: 0.9rem; }
 
-.daily-summary {
-  display: flex;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-}
-
-.daily-card {
-  flex: 1;
-  min-width: 120px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.75rem;
-  text-align: center;
-  position: relative;
-}
-
-/* Dashed rather than solid border -- a genuinely different, coarser data
-   source than today/tomorrow's UKV cards, not the same quality guarantee
-   at equal visual weight. */
-.daily-card-extended { border-style: dashed; }
-
-/* Normal flow, not absolutely positioned -- a corner badge collided with
-   the date label underneath it for longer date strings ("Wed 9 Sept"),
-   covering part of the text. Sitting above the label in its own line
-   can't collide regardless of how long that text is. */
-.daily-badge {
-  display: inline-block;
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-  background: var(--bg);
-  border-radius: 4px;
-  padding: 0.1rem 0.3rem;
-  margin-bottom: 0.4rem;
-}
-
-.daily-label {
-  font-size: 0.8rem;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 0.4rem;
-}
-
-.daily-icon { font-size: 1.8rem; }
-
-.daily-range { margin-top: 0.3rem; }
-.daily-range strong { color: var(--temp); font-size: 1.1rem; }
-
-.daily-desc { color: var(--muted); font-size: 0.8rem; margin-top: 0.2rem; }
-
-.daily-rain { color: var(--precip); font-size: 0.8rem; margin-top: 0.3rem; }
-
 /* Recent-past trailing context reads as already-happened, not more
    forecast -- de-emphasised rather than removed, since it's still useful
    detail on hover/inspection. */

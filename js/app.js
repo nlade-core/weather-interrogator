@@ -16,7 +16,10 @@ function buildForecastUrl(location) {
     latitude: location.latitude,
     longitude: location.longitude,
     timezone: "auto",
-    forecast_days: "2",
+    // 3, not 2: the chart/Ask window now reaches CONTEXT_HOURS (~2.25
+    // days) forward (see below), which needs a 3rd calendar day's worth
+    // of headroom depending on what time "now" is.
+    forecast_days: "3",
     // Extends minutely_15/hourly backward by a full day at the same
     // resolution as the forward data (confirmed: still genuinely 15-min
     // throughout, not a downgraded or repeated series) -- used for the
@@ -43,13 +46,13 @@ function buildForecastUrl(location) {
     // 15-min. is_day confirmed to flip cleanly at 15-min resolution too
     // (checked against a real sunrise: 06:15 still 0, 06:30 already 1).
     minutely_15: "temperature_2m,apparent_temperature,precipitation,wind_speed_10m,wind_direction_10m,weathercode,is_day",
-    // Daily summary: UKV only has real (non-null) data 2 days out
-    // (confirmed -- days 3+ came back null when tried), so this covers
-    // today/tomorrow only, not a fabricated week. Deliberately not mixing
-    // in a lower-resolution global model to fake more days -- that's the
-    // same resolution-mismatch mistake precipitation_probability was
-    // dropped over.
-    daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum",
+    // No `daily` param -- the "Coming days" panel (today/tomorrow real
+    // UKV plus a 5-day best_match estimate strip) was removed rather than
+    // kept: this app now shows only UKV's own real range, in the one
+    // chart, nothing blended past what UKV itself covers. Same
+    // resolution-mismatch reasoning that got precipitation_probability
+    // dropped, applied to the whole daily panel this time rather than one
+    // field.
   };
   // Pinned to the explicit UK model rather than best_match for UK
   // locations: same grid cell, same values for every field that's
@@ -60,28 +63,6 @@ function buildForecastUrl(location) {
   // through to best_match is the only real option, not a lesser choice.
   if (location.isUK) params.models = "ukmo_uk_deterministic_2km";
   url.search = new URLSearchParams(params);
-  return url;
-}
-
-// Separate, independent fetch for days beyond what UKV can reach -- no
-// models pin, so this is best_match's own blend, which for a UK location
-// falls back to a coarser global model past UKV's ~2-day range (confirmed
-// empirically: best_match's own first two days come back byte-identical
-// to the UKV-pinned fetch's, so there's no discrepancy where they
-// overlap -- only the days UKV genuinely can't reach add anything new).
-// forecast_days=7 chosen deliberately short of best_match's actual real
-// range (confirmed non-null out to 15 days) -- a 10-15 day forecast is
-// real data but not a claim this app wants to make about accuracy that
-// far out.
-function buildExtendedDailyUrl(location) {
-  const url = new URL("https://api.open-meteo.com/v1/forecast");
-  url.search = new URLSearchParams({
-    latitude: location.latitude,
-    longitude: location.longitude,
-    timezone: "auto",
-    forecast_days: "7",
-    daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum",
-  });
   return url;
 }
 
@@ -193,7 +174,20 @@ const CHART = {
   axisLabelHeight: 10, // small bottom buffer so icon glyphs at the very bottom of a scale don't clip against the viewBox edge
 };
 
-const CONTEXT_HOURS = 12; // the model's data window (Ask/LLM) AND the chart's forward span -- fixed forward-looking span rather than "rest of today", so it behaves the same at 8am and at 11pm. Deliberately forward-only for Ask, per the recent-past scoping note: that's a later addition, not this one.
+// 54, matching UKV's real forecast ceiling (~54h45m, confirmed empirically
+// via the Single Runs API earlier this project). Checked the *live*
+// forecast endpoint separately (a different mechanism, needed its own
+// check) and found real coverage from "now" actually drifts between
+// roughly 51h and 54h depending on where "now" falls relative to the
+// latest 3-hourly run -- so pushed all the way to 54 (rather than a
+// smaller safety-margin number used previously), the tail of the window
+// can genuinely come back null on a fair fraction of page loads. Handled
+// by filtering, not avoided by picking a smaller number: `points` below
+// drops any index whose temperature reading is null before anything
+// (axis scaling, icons, Ask) sees it, same for the wind-gusts read Ask
+// uses. Real, deliberate tradeoff -- full real range, at the cost of a
+// few genuinely-missing trailing points on some loads rather than none.
+const CONTEXT_HOURS = 54; // the model's data window (Ask/LLM) AND the chart's forward span -- fixed forward-looking span rather than "rest of today", so it behaves the same at 8am and at 11pm. Deliberately forward-only for Ask, per the recent-past scoping note: that's a later addition, not this one.
 const PAST_HOURS = 3; // chart-only: recent-past trailing context, shorter than the forward span so it reads as context for "now" rather than a second co-equal window
 
 function nextHoursIndices(times, now, hours) {
@@ -228,7 +222,20 @@ function renderTodayChart(data) {
   const windowStart = new Date(now.getTime() - PAST_HOURS * 3600 * 1000);
   const spanMs = (PAST_HOURS + CONTEXT_HOURS) * 3600 * 1000;
 
-  const tempIdxs = windowIndices(data.minutely_15.time, now, PAST_HOURS, CONTEXT_HOURS);
+  // Filtered for null temperature readings, not just time-in-range -- with
+  // CONTEXT_HOURS pushed to UKV's actual ceiling (see above), the last
+  // couple of hours in the nominal window can genuinely come back null
+  // depending on exactly when "now" falls relative to the latest run.
+  // Without this, a trailing null would reach Math.min/max in the axis
+  // scaling below and get coerced to 0, corrupting the whole temperature
+  // axis for one bad number at the edge. xForTime still maps against the
+  // full nominal span (not the filtered one), so a short trailing gap
+  // just reads as blank space at the chart's right edge -- an honest "UKV
+  // hasn't published this far yet on this particular load" rather than
+  // stretching the axis to hide it.
+  const tempIdxs = windowIndices(data.minutely_15.time, now, PAST_HOURS, CONTEXT_HOURS).filter(
+    (i) => data.minutely_15.temperature_2m[i] != null
+  );
   const precipIdxs = windowIndices(data.hourly.time, now, PAST_HOURS, CONTEXT_HOURS);
 
   if (tempIdxs.length < 2) {
@@ -373,10 +380,18 @@ function renderTodayChart(data) {
   // Hour labels: moved to the top, matching the usual chart convention
   // (time axis reads top-to-bottom-then-across, not buried at the bottom).
   // Date shown on its own line above -- printed once at the start, and
-  // again at whichever tick crosses into a new calendar day, since a fixed
-  // 12h window (unlike the old "rest of today" one) can span midnight.
+  // again at whichever tick crosses into a new calendar day, since the
+  // window (48h forward + 3h back) routinely spans two or three midnights,
+  // not just the occasional one the old 12h window sometimes crossed.
+  //
+  // Ticked every 3h rather than every hour now that the window is ~4x
+  // wider than the original 15h span -- one label per hour here would be
+  // ~50 labels fighting for the same 760-wide chart, illegible regardless
+  // of font size. 3h keeps roughly the same label density the original
+  // hourly ticks had at the old span.
+  const majorPrecipPoints = precipPoints.filter((p) => new Date(p.time).getHours() % 3 === 0);
   let lastDate = null;
-  const dateLabel = precipPoints
+  const dateLabel = majorPrecipPoints
     .map((p, i) => {
       const label = formatDayMonth(p.time);
       if (label === lastDate) return "";
@@ -386,15 +401,28 @@ function renderTodayChart(data) {
       return `<text x="${x.toFixed(1)}" y="10" class="chart-axis-label" text-anchor="${anchor}">${label}</text>`;
     })
     .join("");
-  const hourLabels = precipPoints
+  const hourLabels = majorPrecipPoints
     .map((p) => `<text x="${p.x.toFixed(1)}" y="22" class="chart-axis-label" text-anchor="middle">${formatHour(p.time)}</text>`)
     .join("");
+
+  // Condition/wind icons: thinned to one mark per hour, not per 15-min
+  // point, now that the window is ~4x wider -- at 51h span, one glyph per
+  // 15-min point is ~200 marks, illegible as icons (unlike the precip
+  // wash below, which is a texture, not text, and stays at full 15-min
+  // density). This does *not* reduce precision: `points` itself (and so
+  // hover) is untouched, still genuine 15-min UKV data -- only the always-
+  // visible glyph layer is coarser. Same principle the old inline "16°"
+  // labels were dropped for: hover already carries the exact value, so
+  // not every point needs a permanently-drawn mark. Real tradeoff, stated
+  // plainly: the temperature/wind *icons* are hourly now, the *data*
+  // underneath (line position on hover, precip bars) is not.
+  const hourlyPoints = points.filter((p) => new Date(p.time).getMinutes() === 0);
 
   // Condition icons: no line to ride above any more, so positioned to
   // visually centre the glyph on its actual value height (a small -4
   // offset, roughly font-size/3, rather than the old -12 that existed
   // purely to clear the now-removed line).
-  const conditionIcons = points
+  const conditionIcons = hourlyPoints
     .map((p) => {
       const icon = describeCode(p.code)[1];
       const y = Math.max(p.yTemp - 4, 10);
@@ -411,7 +439,7 @@ function renderTodayChart(data) {
   // Arrow points in the direction wind is blowing *toward* (direction+180,
   // since wind_direction_10m is meteorological convention -- the direction
   // it's blowing *from*).
-  const windIcons = points
+  const windIcons = hourlyPoints
     .map((p) => {
       const rotation = (p.windDir + 180) % 360;
       const y = Math.max(p.yWind - 4, 10);
@@ -495,7 +523,15 @@ function renderTodayChart(data) {
   `;
 
   attachChartHover(wrap, points);
-  renderDominantFactor(points);
+  // Bounded to today specifically, not the full CONTEXT_HOURS window --
+  // computeDominantFactor's own copy says "today," and that was true when
+  // CONTEXT_HOURS was 12 (rarely reaching past today anyway) but isn't any
+  // more now that the forward window reaches ~48h. Widening this callout's
+  // input without changing its scope would mean "main factor today"
+  // sometimes describing something at 3am the day after tomorrow -- a
+  // real bug the wider window would otherwise introduce silently.
+  const todayPoints = points.filter((p) => new Date(p.time).toDateString() === now.toDateString());
+  renderDominantFactor(todayPoints);
 }
 
 // v1 heuristic, deliberately not a settled design (this was raised as the
@@ -625,66 +661,6 @@ function getChartTooltip() {
   return tooltip;
 }
 
-function dailyCardHtml(label, code, hi, lo, rain, extended) {
-  if (code == null) return "";
-  const [desc, icon] = describeCode(code);
-  const rainNote = rain >= 0.1 ? `<div class="daily-rain">${rain.toFixed(1)}mm</div>` : "";
-  return `
-    <div class="daily-card${extended ? " daily-card-extended" : ""}">
-      ${extended ? `<div class="daily-badge">estimate</div>` : ""}
-      <div class="daily-label">${label}</div>
-      <div class="daily-icon">${icon}</div>
-      <div class="daily-range"><strong>${Math.round(hi)}&deg;</strong> / ${Math.round(lo)}&deg;</div>
-      <div class="daily-desc">${desc}</div>
-      ${rainNote}
-    </div>`;
-}
-
-// Today/tomorrow come from the main UKV-pinned fetch, unchanged from
-// before (UKV comes back null past day 2, confirmed via a real request,
-// not assumed -- a day with no weather_code is skipped rather than shown
-// as a blank/broken card). Days beyond that, if extendedData was fetched
-// successfully, come from a separate best_match request and are marked
-// "estimate" -- a genuinely different, coarser source past UKV's range,
-// not the same 2km guarantee, so it says so rather than presenting both
-// at equal visual weight.
-function renderDailySummary(data, extendedData) {
-  const container = document.getElementById("daily-summary");
-  // Located by matching today's actual date, not assumed to be index 0 --
-  // past_days (added for the chart's recent-past context) prepends a day
-  // to every series including this one, so index 0 is yesterday whenever
-  // past_days is set. Slicing from the matched index keeps this correct
-  // regardless of that setting.
-  const todayStr = data.current.time.slice(0, 10);
-  const todayIdx = Math.max(0, data.daily.time.indexOf(todayStr));
-  const labels = ["Today", "Tomorrow"];
-  let cards = data.daily.time
-    .slice(todayIdx)
-    .map((date, i) => {
-      const j = todayIdx + i;
-      return dailyCardHtml(labels[i] ?? formatDayMonth(date), data.daily.weather_code[j], data.daily.temperature_2m_max[j], data.daily.temperature_2m_min[j], data.daily.precipitation_sum[j], false);
-    })
-    .join("");
-
-  if (extendedData) {
-    const extTodayIdx = Math.max(0, extendedData.daily.time.indexOf(todayStr));
-    // "Estimate" styling only means something when today/tomorrow actually
-    // came from UKV -- for a non-UK location, buildForecastUrl never pins
-    // a model at all, so the main fetch's daily block is already
-    // best_match, identical in kind to these extra days. Marking them
-    // differently there would imply a quality gap that doesn't exist.
-    cards += extendedData.daily.time
-      .slice(extTodayIdx + 2) // skip today/tomorrow -- already shown above, confirmed identical to the main fetch where they overlap (for UK locations; for non-UK both fetches are best_match anyway)
-      .map((date, i) => {
-        const j = extTodayIdx + 2 + i;
-        return dailyCardHtml(formatDayMonth(date), extendedData.daily.weather_code[j], extendedData.daily.temperature_2m_max[j], extendedData.daily.temperature_2m_min[j], extendedData.daily.precipitation_sum[j], LOCATION.isUK);
-      })
-      .join("");
-  }
-
-  container.innerHTML = cards || `<p class="chart-empty">No further-day data available right now.</p>`;
-}
-
 function renderRaw(data) {
   document.getElementById("raw-output").textContent = JSON.stringify(data, null, 2);
 }
@@ -711,11 +687,15 @@ async function geocodeLocation(query) {
   };
 }
 
+// The quality caveat this carried for non-UK locations used to live in the
+// (now-removed) daily-note under the "Coming days" panel -- moved here
+// rather than dropped, since it was the only place on the page saying
+// non-UK data is a coarser model, and that's still true.
 function setLocationCopy() {
-  document.getElementById("subtitle").textContent = `Short-term forecast for ${LOCATION.name}, pulled straight from Open-Meteo.`;
-  document.getElementById("daily-note").innerHTML = LOCATION.isUK
-    ? `UKV (the 2km model everything else on this page uses) only forecasts about 2 days out. Today and tomorrow (solid border) use it directly. The dashed "estimate" days beyond that switch to a coarser global model &mdash; real forecast data, not fabricated, but not the same 2km precision or the same confidence.`
-    : `${LOCATION.name} is outside the UK, so this uses Open-Meteo's <code>best_match</code> model rather than the UK-specific 2km UKV model this page uses for UK locations &mdash; a coarser global model, not the same resolution or quality guarantee. Every day shown, including today, comes from that same source, so none of them get the dashed "estimate" treatment UK locations see beyond day 2 &mdash; there's no split in quality to mark here.`;
+  const qualityNote = LOCATION.isUK
+    ? ""
+    : ` ${LOCATION.name} is outside the UK, so this uses Open-Meteo's best_match model rather than the 2km UKV model used for UK locations -- a coarser global model, not the same resolution or quality guarantee.`;
+  document.getElementById("subtitle").textContent = `Short-term forecast for ${LOCATION.name}, pulled straight from Open-Meteo.${qualityNote}`;
 }
 
 function setupLocationPicker() {
@@ -769,19 +749,6 @@ async function loadForecast() {
     renderRaw(data);
     renderCurrent(data);
     renderTodayChart(data);
-    renderDailySummary(data);
-
-    // Independent of the main fetch -- a failure here shouldn't break
-    // anything else on the page, it just means the extended days don't
-    // show up and today/tomorrow render on their own, same as before this
-    // was added.
-    try {
-      const extRes = await fetch(buildExtendedDailyUrl(LOCATION));
-      if (extRes.ok) renderDailySummary(data, await extRes.json());
-    } catch {
-      // Extended days are a nice-to-have, not core -- silently keep the
-      // today/tomorrow-only render already in place.
-    }
 
     statusEl.textContent = `Updated ${new Date().toLocaleTimeString("en-GB")} — ${LOCATION.name} (${data.latitude.toFixed(2)}, ${data.longitude.toFixed(2)})`;
     return data;
@@ -801,7 +768,7 @@ async function loadForecast() {
 // runtime, and this needs re-evaluating fresh at session-creation time
 // rather than being baked in once at module load.
 function buildSystemPrompt() {
-  return `Weather assistant for ${LOCATION.name}, covering only the next ${CONTEXT_HOURS} hours from now (no other days, no rain-probability figure -- deliberately not provided, the available one wasn't locally reliable). You don't have any weather numbers yet: for each question, you'll first be asked to restate what the person actually wants to know, then which data categories would help, then you'll be given only that data to answer with. Keep every answer to 1-2 sentences, and say so plainly if the data you're given isn't enough to answer confidently -- don't guess.`;
+  return `Weather assistant for ${LOCATION.name}, covering only the next ${CONTEXT_HOURS} hours from now (no other days, no rain-probability figure -- deliberately not provided, the available one wasn't locally reliable). ${LOCATION.isUK ? "All of this data is the UK Met Office's own UKV model at 2km resolution, not a blended or lower-resolution estimate -- the full range it actually covers, nothing beyond it." : ""} You don't have any weather numbers yet: for each question, you'll first be asked to restate what the person actually wants to know, then which data categories would help, then you'll be given only that data to answer with. Keep every answer to 1-2 sentences, and say so plainly if the data you're given isn't enough to answer confidently -- don't guess.`;
 }
 
 function withTimeout(promise, ms) {
@@ -811,48 +778,145 @@ function withTimeout(promise, ms) {
   ]);
 }
 
-// Fixed vocabulary the "what data is needed" step picks from -- a closed
-// set rather than free text is what makes the following lookup step a
-// genuine simple lookup instead of another fuzzy-parsing problem.
-const CATEGORY_MATCHERS = [
-  ["temperature", /temp/i],
-  ["apparent_temperature", /apparent|feels? ?like|wind ?chill|heat index/i],
-  ["rain", /rain|precip/i],
-  ["wind", /\bwind\b/i],
-  ["gusts", /gust/i],
-  ["conditions", /condition|cloud|sky|overcast|storm|snow|fog/i],
-];
-const DEFAULT_CATEGORIES = ["temperature", "rain", "conditions"];
+// Ported from ask-parsing-test.html after six rounds of testing against
+// the real on-device model (see that file's version-history caveat for
+// the full trail). Replaces the old free-text-plus-regex category match
+// entirely -- responseConstraint forces the model's output to actually
+// match this shape, rather than hoping a regex catches whatever it said.
+const CATEGORIES = ["temperature", "apparent_temperature", "rain", "wind", "gusts", "conditions"];
+// whole_window reuses CONTEXT_HOURS directly rather than a second magic
+// number, so the two can't drift out of sync if the UKV window ever
+// changes again.
+const TIME_SCOPES = { next_few_hours: 3, today: 12, whole_window: CONTEXT_HOURS };
 
-function matchCategories(text) {
-  const found = CATEGORY_MATCHERS.filter(([, re]) => re.test(text)).map(([name]) => name);
-  return found.length ? found : DEFAULT_CATEGORIES;
+// Function, not a const object -- same reason as buildSystemPrompt below,
+// LOCATION.name needs to be current at call time, not baked in at module
+// load. applicable is the only required field: categories/timeScope only
+// matter once it's true, so a question this assistant genuinely can't
+// answer (off-topic, or beyond the window) gets a real "no" rather than a
+// forced, confident-looking pick -- found via the bench that without this,
+// "what about this weekend?" and off-topic questions both got fabricated
+// extractions, because the schema had no way to say "none of these apply."
+function buildParseSchema() {
+  return {
+    type: "object",
+    properties: {
+      applicable: {
+        type: "boolean",
+        description: `true only if this weather assistant (${LOCATION.name}, next ${CONTEXT_HOURS} hours, temperature/rain/wind/conditions) can actually answer the question. false for anything off-topic, or about a time period this data can't reach.`,
+      },
+      categories: {
+        type: "array",
+        items: { type: "string", enum: CATEGORIES },
+        description: "temperature: air temp in C. apparent_temperature: feels-like (wind chill/heat index). rain: precipitation amount in mm -- pick this whenever rain/precipitation is relevant, even if conditions is also picked, it is not a substitute. wind: speed+direction. gusts: peak gust speed. conditions: general sky/weather type (cloudy, storm, snow) -- a supplement to rain, not a replacement for it.",
+      },
+      timeScope: { type: "string", enum: Object.keys(TIME_SCOPES) },
+    },
+    required: ["applicable"],
+  };
+}
+
+// Ported from ask-parsing-test.html's v6 -- found via the bench, not
+// theorised: formatHour only ever returns bare HH:MM, and at whole_window
+// scope the series spans 2-3 calendar days, so "01:00" genuinely repeats
+// with zero way to tell which occurrence is which. That produced a real
+// garbled, duplicated-timestamp answer in testing. Every category below
+// groups by calendar day instead of one flat list.
+function dayLabel(iso, todayKey) {
+  const key = iso.slice(0, 10);
+  if (key === todayKey) return "Today";
+  const diffDays = Math.round((new Date(key) - new Date(todayKey)) / 86400000);
+  if (diffDays === 1) return "Tomorrow";
+  return new Date(iso).toLocaleDateString("en-GB", { weekday: "short" });
+}
+function groupIndicesByDay(idxs, times, todayKey) {
+  const groups = [];
+  let curKey = null;
+  idxs.forEach((i) => {
+    const key = times[i].slice(0, 10);
+    if (key !== curKey) {
+      groups.push({ label: dayLabel(times[i], todayKey), idxs: [] });
+      curKey = key;
+    }
+    groups[groups.length - 1].idxs.push(i);
+  });
+  return groups;
+}
+function numericSeries(groups, times, valueFn) {
+  return groups.map((g) => `[${g.label}] ${g.idxs.map((i) => `${formatHour(times[i])}=${valueFn(i)}`).join(",")}`).join("; ");
+}
+// Run-length summarized, not one entry per hour -- weather doesn't change
+// every hour, and (found via the bench) 40+ individual hourly entries at
+// whole_window scope was too much for the model to compress into "1-2
+// sentences" on its own, even with the day label attached.
+function conditionsSeries(groups, times, labelFn) {
+  return groups.map((g) => {
+    const runs = [];
+    g.idxs.forEach((i) => {
+      const label = labelFn(i);
+      const last = runs[runs.length - 1];
+      if (last && last.label === label) last.endIdx = i;
+      else runs.push({ label, startIdx: i, endIdx: i });
+    });
+    const runText = runs
+      .map((run) => (run.startIdx === run.endIdx
+        ? `${run.label} ${formatHour(times[run.startIdx])}`
+        : `${run.label} ${formatHour(times[run.startIdx])}-${formatHour(times[run.endIdx])}`))
+      .join(", ");
+    return `[${g.label}] ${runText}`;
+  }).join("; ");
+}
+// All-dry shortcut, not 40+ repeats of "0.0mm" -- the exact shape of the
+// case that broke in testing: rain was 0.0mm at every extracted hour, and
+// a wall of zero readings was crowding out the one useful conclusion it
+// actually supports.
+function rainSeries(groups, times, mmFn) {
+  const allDry = groups.every((g) => g.idxs.every((i) => mmFn(i) < 0.1));
+  if (allDry) return "No rain expected across the whole selected window.";
+  return numericSeries(groups, times, (i) => `${mmFn(i).toFixed(1)}mm`);
 }
 
 // The "simple lookup" step: plain deterministic code, no model involved.
-// Pulls only the requested categories, only for the next CONTEXT_HOURS --
-// this is what keeps each question's numeric payload small regardless of
-// how much data the app actually has on hand.
-function lookupWeatherData(data, categories) {
+// Pulls only the requested categories, only for the picked timeScope --
+// this is what keeps each question's numeric payload small, and (since
+// the schema-constrained pick above) scoped to what the *question* needs
+// rather than always the full window regardless of what was asked.
+function lookupWeatherData(data, categories, timeScope) {
   const now = new Date(data.current.time);
+  const todayKey = data.current.time.slice(0, 10);
   const [desc] = describeCode(data.current.weathercode);
-  const idxs15 = nextHoursIndices(data.minutely_15.time, now, CONTEXT_HOURS);
-  const idxsHourly = nextHoursIndices(data.hourly.time, now, CONTEXT_HOURS);
+  const hours = TIME_SCOPES[timeScope] ?? CONTEXT_HOURS;
+  const idxs15 = nextHoursIndices(data.minutely_15.time, now, hours);
+  const idxsHourly = nextHoursIndices(data.hourly.time, now, hours);
+  // Downsampled to on-the-hour and null-guarded for the same reasons as
+  // the chart's tempIdxs: an on-device model has no hover fallback the way
+  // the chart does, and CONTEXT_HOURS reaches UKV's actual ceiling, so the
+  // tail of the window can genuinely be unpublished yet on some loads.
+  const idxs15Hourly = idxs15.filter((i) => new Date(data.minutely_15.time[i]).getMinutes() === 0 && data.minutely_15.temperature_2m[i] != null);
+  const idxsHourlyGusts = idxsHourly.filter((i) => data.hourly.wind_gusts_10m[i + 1] != null);
+  const idxsHourlyConditions = idxsHourly.filter((i) => data.minutely_15.weathercode[data.minutely_15.time.indexOf(data.hourly.time[i])] != null);
+
+  const groups15 = groupIndicesByDay(idxs15Hourly, data.minutely_15.time, todayKey);
+  const groupsGusts = groupIndicesByDay(idxsHourlyGusts, data.hourly.time, todayKey);
+  const groupsConditions = groupIndicesByDay(idxsHourlyConditions, data.hourly.time, todayKey);
 
   const builders = {
-    // Same preceding-interval shift as the chart: the reading at index i+1
-    // is the one actually in force during the slot at index i.
-    temperature: () => `Temperature next ${CONTEXT_HOURS}h (15-min, HH:MM=C): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${data.minutely_15.temperature_2m[i].toFixed(1)}`).join(",")}`,
-    apparent_temperature: () => `Feels-like temperature (wind chill/heat index combined) next ${CONTEXT_HOURS}h (15-min, HH:MM=C): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${data.minutely_15.apparent_temperature[i].toFixed(1)}`).join(",")}`,
-    rain: () => `Rain amount next ${CONTEXT_HOURS}h (15-min mm, HH:MM=mm): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${(data.minutely_15.precipitation[i + 1] ?? 0).toFixed(1)}`).join(",")}`,
-    wind: () => `Wind next ${CONTEXT_HOURS}h (15-min, HH:MM=mph+direction): ${idxs15.map((i) => `${formatHour(data.minutely_15.time[i])}=${Math.round(data.minutely_15.wind_speed_10m[i])}${compassLabel(data.minutely_15.wind_direction_10m[i])}`).join(",")}`,
+    temperature: () => `Temperature (hourly, HH:MM=C): ${numericSeries(groups15, data.minutely_15.time, (i) => data.minutely_15.temperature_2m[i].toFixed(1))}`,
+    apparent_temperature: () => `Feels-like temperature (wind chill/heat index combined) (hourly, HH:MM=C): ${numericSeries(groups15, data.minutely_15.time, (i) => data.minutely_15.apparent_temperature[i].toFixed(1))}`,
+    // Summed across the four 15-min readings that make up each hour
+    // (i+1..i+4 -- same preceding-interval convention as the chart, just
+    // summed instead of taking one quarter) rather than reusing the
+    // chart's single-quarter shift, which would silently describe only
+    // the last 15 minutes of the hour, not the hour's actual total.
+    rain: () => `Rain amount (hourly total mm, HH:MM=mm): ${rainSeries(groups15, data.minutely_15.time, (i) => { let mm = 0; for (let k = 1; k <= 4; k++) mm += data.minutely_15.precipitation[i + k] ?? 0; return mm; })}`,
+    wind: () => `Wind (hourly, HH:MM=mph+direction): ${numericSeries(groups15, data.minutely_15.time, (i) => `${Math.round(data.minutely_15.wind_speed_10m[i])}${compassLabel(data.minutely_15.wind_direction_10m[i])}`)}`,
     // wind_gusts_10m is a preceding-hour max, same convention precipitation_
     // probability had -- shifted back one position so the reading lines up
     // with the hour it's actually in force for, not the hour it's filed under.
-    gusts: () => `Wind gusts next ${CONTEXT_HOURS}h (hourly peak mph, HH:MM=mph): ${idxsHourly.map((i) => `${formatHour(data.hourly.time[i])}=${Math.round(data.hourly.wind_gusts_10m[i + 1])}`).join(",")}`,
+    gusts: () => `Wind gusts (hourly peak mph, HH:MM=mph): ${numericSeries(groupsGusts, data.hourly.time, (i) => `${Math.round(data.hourly.wind_gusts_10m[i + 1])}mph`)}`,
     // weathercode lives on minutely_15 (see fetch config) -- kept at hourly
     // cadence here to match the on-the-hour marks the other hourly field uses.
-    conditions: () => `Conditions next ${CONTEXT_HOURS}h (hourly, HH:MM=type): ${idxsHourly.map((i) => { const mIdx = data.minutely_15.time.indexOf(data.hourly.time[i]); return `${formatHour(data.hourly.time[i])}=${conditionLabel(data.minutely_15.weathercode[mIdx])}`; }).join(",")}`,
+    conditions: () => `Conditions (HH:MM=type, consecutive same readings collapsed into ranges): ${conditionsSeries(groupsConditions, data.hourly.time, (i) => conditionLabel(data.minutely_15.weathercode[data.minutely_15.time.indexOf(data.hourly.time[i])]))}`,
   };
 
   const currentGap = data.current.apparent_temperature - data.current.temperature_2m;
@@ -953,29 +1017,62 @@ function ensureChatSession() {
 // first question of a session -- see askedBefore in setupAsk.
 async function runStagedAsk(session, question, data) {
   logEntry("status", "Understanding what you're asking…");
+  // "Respond with only that one sentence" added after bench testing showed
+  // this call occasionally bleeding category/timeScope-shaped text into
+  // the goal itself -- harmless once the next stage is schema-constrained
+  // (it overrides whatever this said regardless), but worth keeping clean.
   const goal = await session.prompt(
-    `A user asked a weather assistant: "${question}". In one short sentence, restate what they actually want to know or decide -- not the data, just their underlying goal.`
+    `A user asked a weather assistant: "${question}". In one short sentence, restate what they actually want to know or decide -- not the data, just their underlying goal. Respond with only that one sentence -- do not mention data categories, time scopes, or anything else.`
   );
   logEntry("reasoning", `Goal: ${goal}`);
 
   logEntry("status", "Deciding what data is needed…");
-  const categoriesRaw = await session.prompt(
-    `Available data categories for the next ${CONTEXT_HOURS} hours: temperature, feels-like temperature (wind chill/heat index), rain amount, wind (speed+direction), wind gusts, conditions (sky/precipitation type). Given the goal "${goal}", which categories are actually needed to answer it? List just the relevant category names.`
-  );
-  logEntry("reasoning", `Data needed: ${categoriesRaw}`);
+  // Two worked examples in the prompt body, not the schema description --
+  // bench testing found the schema's `description` field only weakly
+  // steers content choices; a genuine question this deliberately does NOT
+  // include as an example so re-testing that case still checks
+  // generalisation, not lookup.
+  const parseRaw = await session.prompt(
+    `Given the goal "${goal}", first decide whether this weather assistant can actually answer it at all -- set applicable to false for anything off-topic, or asking about a time period beyond the next ${CONTEXT_HOURS} hours. Only if applicable, pick which data categories and time scope are needed.
 
-  const categories = matchCategories(categoriesRaw);
-  if (categories === DEFAULT_CATEGORIES) {
-    logEntry("status", `Couldn't parse a specific data need — falling back to: ${categories.join(", ")}`);
+Example: "Should I go for a picnic?" -> applicable: true, categories: [temperature, rain, wind], timeScope: today
+Example: "Is it a good day for gardening?" -> applicable: true, categories: [temperature, rain, conditions], timeScope: today`,
+    { responseConstraint: buildParseSchema() }
+  );
+
+  let parsed = null;
+  try { parsed = JSON.parse(parseRaw); } catch { /* handled below */ }
+
+  if (!parsed || parsed.applicable === false) {
+    logEntry("reasoning", parsed ? "Flagged as outside what this assistant can answer." : "Couldn't parse a data need -- treating as out of scope rather than guessing.");
+    // Deterministic, not a further model call -- this is already a
+    // confident (or failed) classification, no reason to ask the model to
+    // improvise a decline on top of it.
+    return `I can only help with ${LOCATION.name} weather over the next ${CONTEXT_HOURS} hours -- this question is outside what I can answer.`;
   }
 
+  // Deterministic rain-inclusion rule, not a further prompt-engineering
+  // attempt -- four rounds of bench testing (schema description, then two
+  // worked examples) all failed to get the model to reliably pick "rain"
+  // for an implicit/activity-suitability question. Rain data is cheap to
+  // include and rarely wrong to have.
+  let categories = parsed.categories || [];
+  if ((categories.includes("wind") || categories.includes("temperature")) && !categories.includes("rain")) {
+    categories = [...categories, "rain"];
+  }
+  logEntry("reasoning", `Categories: ${categories.join(", ") || "(none)"}. Time scope: ${parsed.timeScope}.`);
+
   logEntry("status", `Looking up: ${categories.join(", ")}…`);
-  const lookupText = lookupWeatherData(data, categories);
+  const lookupText = lookupWeatherData(data, categories, parsed.timeScope);
   logEntry("lookup", lookupText);
 
   logEntry("status", "Answering…");
+  // "Plain prose, not JSON" added after bench testing showed this exact
+  // turn -- reusing the same session right after a responseConstraint
+  // turn -- sometimes just re-emitting the previous turn's JSON instead of
+  // switching back to free text, on 2 of 6 applicable test cases.
   return session.prompt(
-    `Goal: ${goal}\nRelevant data only:\n${lookupText}\n\nAnswer the original question ("${question}") in 1-2 sentences using only this data.`
+    `Goal: ${goal}\nRelevant data only:\n${lookupText}\n\nAnswer the original question ("${question}") in 1-2 sentences using only this data. Respond in plain prose, not JSON or any structured format.`
   );
 }
 
